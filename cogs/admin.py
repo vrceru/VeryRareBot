@@ -151,12 +151,12 @@ class Admin(commands.Cog):
         reason: str
     ):
 
-        if minutes > 40320:
+        if not 1 <= minutes <= 40320:
 
             await interaction.response.send_message(
                 embed=error_embed(
                     "Invalid Duration",
-                    "Maximum timeout duration is 28 days."
+                "Timeout duration must be between 1 minute and 28 days."
                 ),
                 ephemeral=True
             )
@@ -195,7 +195,7 @@ class Admin(commands.Cog):
         amount: int
     ):
 
-        if not interaction.channel:
+        if not interaction.channel or not hasattr(interaction.channel, "purge"):
 
             await interaction.response.send_message(
                 embed=error_embed(
@@ -207,6 +207,13 @@ class Admin(commands.Cog):
 
             return
 
+
+        if not 1 <= amount <= 100:
+            await interaction.response.send_message(
+                embed=error_embed("Invalid Amount", "Choose between 1 and 100 messages."),
+                ephemeral=True
+            )
+            return
 
         await interaction.response.defer(
             ephemeral=True

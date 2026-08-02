@@ -28,8 +28,12 @@ def memory_usage():
     return psutil.virtual_memory()
 
 
-def disk_usage():
-    return psutil.disk_usage("/")
+def disk_usage(path: str = "/"):
+    """Return disk use for a path, falling back to the host root."""
+    try:
+        return psutil.disk_usage(path)
+    except (FileNotFoundError, OSError):
+        return psutil.disk_usage("/")
 
 
 def uptime():

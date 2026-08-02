@@ -38,7 +38,13 @@ class VeryRareBot(commands.Bot):
 
         await self.load_cogs()
 
-        await self.tree.sync()
+        if settings.GUILD_ID:
+            guild = discord.Object(id=settings.GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            logger.info("Slash commands synced to development guild %s", settings.GUILD_ID)
+        else:
+            await self.tree.sync()
 
         logger.info(
             "Slash commands synced"
@@ -121,10 +127,16 @@ async def on_app_command_error(
         return
 
 
-    logger.exception(
-        "Unhandled application command error",
-        exc_info=error
+    logger.exception("Unhandled application command error", exc_info=error)
+
+    embed = error_embed(
+        "Command Failed",
+        "Something went wrong while running that command. Please try again later."
     )
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -147,6 +159,10 @@ async def on_ready():
 
 
 async def main():
+
+    configuration_errors = settings.validate()
+    if configuration_errors:
+        raise RuntimeError("Invalid configuration: " + "; ".join(configuration_errors))
 
     async with bot:
 
