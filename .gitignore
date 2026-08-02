@@ -1,11 +1,57 @@
+# Dependencies
+node_modules/
+
+# Environment files
 .env
+.env.*
+!.env.example
 
-__pycache__/
-*.pyc
+# Logs
+*.log
+logs/
 
-logs/*.log
+# Build output
+dist/
+build/
+.next/
+out/
 
-data/*
+# Coverage
+coverage/
 
-*.sqlite
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-data/
+
+# Local databases
 *.db
+*.sqlite
+*.sqlite3
+
+# Certificates & Keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# SSH Keys
+id_rsa
+id_ed25519
+
+# Secrets
+secrets/
+config/local.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.class
+
