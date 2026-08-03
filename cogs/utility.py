@@ -11,6 +11,24 @@ from core.embed import (
 )
 
 from config import settings
+from services import system
+
+INVITE_PERMISSIONS = discord.Permissions(
+    view_channel=True,
+    send_messages=True,
+    embed_links=True,
+    attach_files=True,
+    read_message_history=True,
+    manage_messages=True,
+    manage_channels=True,
+    manage_roles=True,
+    kick_members=True,
+    ban_members=True,
+    moderate_members=True,
+    connect=True,
+    speak=True,
+    use_voice_activation=True,
+)
 
 
 class Utility(commands.Cog):
@@ -214,6 +232,218 @@ class Utility(commands.Cog):
             inline=False
         )
 
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True
+        )
+
+
+    @app_commands.command(
+        name="avatar",
+        description="Shows a member's avatar."
+    )
+    @app_commands.describe(
+        member="Member to look up. Defaults to you."
+    )
+    async def avatar(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None
+    ):
+
+        member = member or interaction.user
+
+        embed = utility_embed(
+            f"{member.display_name}'s Avatar"
+        )
+
+        embed.set_image(
+            url=member.display_avatar.url
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
+    @app_commands.command(
+        name="userinfo",
+        description="Shows information about a member."
+    )
+    @app_commands.describe(
+        member="Member to look up. Defaults to you."
+    )
+    async def userinfo(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None
+    ):
+
+        member = member or interaction.user
+
+        embed = utility_embed(
+            f"User Info: {member.display_name}"
+        )
+
+        embed.set_thumbnail(
+            url=member.display_avatar.url
+        )
+
+        embed.add_field(
+            name="Username",
+            value=str(member),
+            inline=True
+        )
+
+        embed.add_field(
+            name="ID",
+            value=str(member.id),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Bot Account",
+            value="Yes" if member.bot else "No",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Account Created",
+            value=discord.utils.format_dt(member.created_at, style="R"),
+            inline=True
+        )
+
+        if member.joined_at:
+            embed.add_field(
+                name="Joined Server",
+                value=discord.utils.format_dt(member.joined_at, style="R"),
+                inline=True
+            )
+
+        embed.add_field(
+            name="Top Role",
+            value=member.top_role.mention,
+            inline=True
+        )
+
+        roles = [role.mention for role in reversed(member.roles) if role.name != "@everyone"]
+
+        embed.add_field(
+            name=f"Roles ({len(roles)})",
+            value=" ".join(roles[:20]) if roles else "None",
+            inline=False
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
+    @app_commands.command(
+        name="botstats",
+        description="Shows detailed bot runtime statistics."
+    )
+    async def botstats(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        seconds = int(
+            time.time() - self.start_time
+        )
+
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+
+        member_count = sum(
+            guild.member_count or 0
+            for guild in self.bot.guilds
+        )
+
+        embed = utility_embed(
+            "Bot Statistics"
+        )
+
+        embed.add_field(
+            name="Version",
+            value=get_version(),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Latency",
+            value=f"{round(self.bot.latency * 1000)} ms",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Uptime",
+            value=f"{hours}h {minutes}m {secs}s",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Servers",
+            value=str(len(self.bot.guilds)),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Members",
+            value=str(member_count),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Commands",
+            value=str(len(self.bot.tree.get_commands())),
+            inline=True
+        )
+
+        embed.add_field(
+            name="CPU Usage",
+            value=f"{system.cpu_usage()}%",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Memory Usage",
+            value=f"{system.memory_usage().percent}%",
+            inline=True
+        )
+
+        embed.add_field(
+            name="discord.py",
+            value=discord.__version__,
+            inline=True
+        )
+
+        await interaction.response.send_message(
+            embed=embed
+        )
+
+
+    @app_commands.command(
+        name="invite",
+        description="Get an invite link to add VeryRareBot to another server."
+    )
+    async def invite(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        url = discord.utils.oauth_url(
+            self.bot.application_id or self.bot.user.id,
+            permissions=INVITE_PERMISSIONS,
+            scopes=("bot", "applications.commands")
+        )
+
+        embed = info_embed(
+            "Invite VeryRareBot",
+            f"[Click here to add VeryRareBot to your server]({url})"
+        )
 
         await interaction.response.send_message(
             embed=embed,
