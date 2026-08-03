@@ -96,6 +96,8 @@ _MIGRATIONS = (
     ("media_requests", "vrms_job_id", "TEXT"),
     ("media_requests", "vrms_gate_channel_id", "INTEGER"),
     ("media_requests", "vrms_gate_message_id", "INTEGER"),
+    ("media_requests", "vrms_progress", "REAL"),
+    ("media_requests", "vrms_stage", "TEXT"),
 )
 
 ACTIVE_MEDIA_STATUSES = ("pending", "on_hold", "approved", "downloading")
@@ -318,6 +320,13 @@ class Database:
         await self.conn.execute(
             "UPDATE media_requests SET vrms_job_id = ? WHERE id = ?",
             (job_id, request_id),
+        )
+        await self.conn.commit()
+
+    async def set_media_request_progress(self, request_id: int, progress: float | None, stage: str | None) -> None:
+        await self.conn.execute(
+            "UPDATE media_requests SET vrms_progress = ?, vrms_stage = ? WHERE id = ?",
+            (progress, stage, request_id),
         )
         await self.conn.commit()
 

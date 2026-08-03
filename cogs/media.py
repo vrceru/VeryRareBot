@@ -46,6 +46,35 @@ ACTIVE_STATUSES = ["pending", "on_hold", "approved", "downloading"]
 TERMINAL_STATUSES = {"completed", "denied", "cancelled", "failed"}
 GATE_COLOR = discord.Color.gold()
 
+# VRMS pipeline stage machine-name -> a label admins can actually read on the request card.
+VRMS_STAGE_LABELS = {
+    "validate_request": "Validating request",
+    "search_providers": "Searching providers",
+    "select_release": "Selecting release",
+    "await_release_approval": "Awaiting release approval",
+    "download": "Downloading",
+    "verify_download": "Verifying download",
+    "virus_scan": "Scanning for viruses",
+    "extract_archive": "Extracting archive",
+    "validate_media": "Validating media",
+    "identify_media": "Identifying media type",
+    "fetch_metadata": "Fetching metadata",
+    "await_final_approval": "Awaiting final approval",
+    "rename_files": "Renaming files",
+    "organize_library": "Organizing library",
+    "generate_artwork": "Generating artwork",
+    "update_jellyfin": "Updating Jellyfin",
+    "send_notifications": "Sending notifications",
+    "log_completion": "Finishing up",
+    "archive_history": "Archiving",
+}
+
+
+def _progress_bar(fraction: float, length: int = 14) -> str:
+    fraction = max(0.0, min(1.0, fraction))
+    filled = round(fraction * length)
+    return "▓" * filled + "░" * (length - filled)
+
 STATUS_FILTER_CHOICES = [app_commands.Choice(name=label, value=key) for key, label in STATUS_LABELS.items()]
 
 STAFF_ROLE_IDS = [
@@ -76,6 +105,11 @@ def build_request_embed(request) -> discord.Embed:
     embed.add_field(name="Type", value="Movie" if request["media_type"] == "movie" else "TV Show", inline=True)
     embed.add_field(name="Status", value=STATUS_LABELS.get(request["status"], request["status"]), inline=True)
     embed.add_field(name="Requested By", value=f"<@{request['requester_id']}>", inline=True)
+    if request["status"] == "downloading" and request["vrms_progress"] is not None:
+        pct = round(request["vrms_progress"] * 100)
+        stage_label = VRMS_STAGE_LABELS.get(request["vrms_stage"], request["vrms_stage"] or "Working")
+        bar = _progress_bar(request["vrms_progress"])
+        embed.add_field(name="Progress", value=f"`{bar}` {pct}%\n{stage_label}", inline=False)
     if request["notes"]:
         embed.add_field(name="Notes", value=request["notes"], inline=False)
     if request["reviewer_id"]:
@@ -468,9 +502,18 @@ class Media(commands.Cog):
         if row["vrms_gate_message_id"]:
             await self._clear_vrms_gate(row)
 
+        progress = job.get("progress")
+        stage = job.get("stage")
+        progress_changed = progress != row["vrms_progress"] or stage != row["vrms_stage"]
+        if progress_changed:
+            await bot.db.set_media_request_progress(request_id, progress, stage)
+            row = await bot.db.get_media_request(request_id)
+
         if status == "running" and row["status"] == "approved":
             updated = await _apply_status(bot, request_id, "downloading")
             await _refresh_request_card(bot, updated)
+        elif row["status"] == "downloading" and progress_changed:
+            await _refresh_request_card(bot, row)
 
     async def _ensure_vrms_gate_card(self, row, gate: str, client: VRMSAPIClient) -> None:
         if row["vrms_gate_message_id"]:
