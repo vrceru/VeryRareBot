@@ -129,3 +129,37 @@ def member_access():
     return discord.app_commands.check(
         predicate
     )
+
+
+def moderation_target_error(
+    interaction: discord.Interaction,
+    target: discord.Member
+) -> str | None:
+    """Return a user-facing reason `target` cannot be moderated by the invoker, or None if allowed."""
+
+    guild = interaction.guild
+
+    if guild is None:
+        return "This command can only be used in a server."
+
+    if target.id == interaction.user.id:
+        return "You cannot use this on yourself."
+
+    if target.id == guild.owner_id:
+        return "You cannot moderate the server owner."
+
+    if guild.me and target.id == guild.me.id:
+        return "You cannot moderate the bot."
+
+    actor = interaction.user
+    if (
+        isinstance(actor, discord.Member)
+        and actor.id != guild.owner_id
+        and target.top_role >= actor.top_role
+    ):
+        return "You cannot moderate a member with an equal or higher role than you."
+
+    if guild.me and target.top_role >= guild.me.top_role:
+        return "My role is not high enough to moderate that member."
+
+    return None
