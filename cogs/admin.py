@@ -10,7 +10,8 @@ from config import settings
 from core.embed import (
     admin_embed,
     success_embed,
-    error_embed
+    error_embed,
+    warning_embed
 )
 
 from core.checks import admin_access, moderation_target_error
@@ -73,6 +74,72 @@ class Admin(commands.Cog):
         await interaction.response.send_message(
             embed=success_embed(
                 "Announcement Sent",
+                f"Posted in {channel.mention}"
+            ),
+            ephemeral=True
+        )
+
+
+    @admin_access()
+    @app_commands.command(
+        name="maintenance",
+        description="Announce scheduled maintenance."
+    )
+    @app_commands.describe(
+        message="What's happening and any relevant details.",
+        starts_in_minutes="Minutes until maintenance begins, if known."
+    )
+    async def maintenance(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+        starts_in_minutes: app_commands.Range[int, 0, 43200] | None = None
+    ):
+
+        channel = self.bot.get_channel(
+            settings.ANNOUNCEMENT_CHANNEL_ID
+        )
+
+        if channel is None:
+
+            await interaction.response.send_message(
+                embed=error_embed(
+                    "Announcement Failed",
+                    "Announcement channel is not configured."
+                ),
+                ephemeral=True
+            )
+
+            return
+
+
+        embed = warning_embed(
+            "Scheduled Maintenance",
+            message
+        )
+
+        if starts_in_minutes is not None:
+            start_time = discord.utils.utcnow() + timedelta(minutes=starts_in_minutes)
+            embed.add_field(
+                name="Starts",
+                value=discord.utils.format_dt(start_time, style="R"),
+                inline=False
+            )
+
+        embed.set_author(
+            name=interaction.user.display_name,
+            icon_url=interaction.user.display_avatar.url
+        )
+
+
+        await channel.send(
+            embed=embed
+        )
+
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Maintenance Notice Sent",
                 f"Posted in {channel.mention}"
             ),
             ephemeral=True

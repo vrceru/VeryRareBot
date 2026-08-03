@@ -54,6 +54,31 @@ async def service_action(action: str) -> str:
     return "active" if action in {"start", "restart"} else "inactive"
 
 
+async def is_active(service_name: str | None = None) -> str:
+    """Return systemd's single-word state (active/inactive/failed/...) for the service.
+
+    Unlike `service_action`, a non-"active" result is a normal, expected outcome here
+    (not a communication failure), since `systemctl is-active` exits non-zero for it.
+    """
+    service_name = service_name or settings.VRMS_SERVICE_NAME
+    if not service_name:
+        raise VRMSError("VRMS_SERVICE_NAME is not configured.")
+    if not SERVICE_NAME.fullmatch(service_name):
+        raise VRMSError("VRMS_SERVICE_NAME contains invalid characters.")
+
+    command = ["systemctl", "is-active", service_name]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+    except (OSError, asyncio.TimeoutError) as exc:
+        raise VRMSError("Could not communicate with systemd.") from exc
+    return stdout.decode(errors="replace").strip() or "unknown"
+
+
 async def status() -> VRMSStatus:
     path = Path(settings.VRMS_PATH).expanduser()
     service_state = None
