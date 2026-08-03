@@ -8,6 +8,7 @@ from core.version import get_version
 from core.startup import startup_banner, ready_banner
 from config import settings
 from core.embed import error_embed
+from services.database import Database
 
 
 logger = setup_logger()
@@ -29,12 +30,17 @@ class VeryRareBot(commands.Bot):
             intents=intents
         )
 
+        self.db = Database(settings.DATABASE_PATH)
+
 
     async def setup_hook(self):
 
         logger.info(
             f"Starting VeryRareBot v{get_version()}"
         )
+
+        await self.db.connect()
+        logger.info("Database connected at %s", settings.DATABASE_PATH)
 
         await self.load_cogs()
 
@@ -81,6 +87,13 @@ class VeryRareBot(commands.Bot):
                     logger.exception(
                         f"Failed loading {extension}: {e}"
                     )
+
+
+    async def close(self):
+
+        await self.db.close()
+
+        await super().close()
 
 
 bot = VeryRareBot()
