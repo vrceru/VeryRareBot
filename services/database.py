@@ -84,9 +84,16 @@ CREATE TABLE IF NOT EXISTS tempvoice_channels (
     channel_id INTEGER PRIMARY KEY,
     guild_id INTEGER NOT NULL,
     owner_id INTEGER NOT NULL,
+    panel_message_id INTEGER,
     created_at TEXT NOT NULL
 );
 """
+
+# Additive migrations for columns added after a table's first release, since
+# "CREATE TABLE IF NOT EXISTS" above is a no-op against an already-existing table.
+_MIGRATIONS = (
+    ("tempvoice_channels", "panel_message_id", "INTEGER"),
+)
 
 ACTIVE_MEDIA_STATUSES = ("pending", "on_hold", "approved", "downloading")
 
@@ -108,7 +115,15 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys = ON")
         await self._conn.executescript(_SCHEMA)
+        await self._run_migrations()
         await self._conn.commit()
+
+    async def _run_migrations(self) -> None:
+        for table, column, column_type in _MIGRATIONS:
+            cursor = await self._conn.execute(f"PRAGMA table_info({table})")
+            existing_columns = {row[1] for row in await cursor.fetchall()}
+            if column not in existing_columns:
+                await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
     async def close(self) -> None:
         if self._conn:
@@ -361,6 +376,13 @@ class Database:
             (channel_id,),
         )
         return await cursor.fetchone()
+
+    async def set_tempvoice_panel_message(self, channel_id: int, message_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE tempvoice_channels SET panel_message_id = ? WHERE channel_id = ?",
+            (message_id, channel_id),
+        )
+        await self.conn.commit()
 
     async def set_tempvoice_owner(self, channel_id: int, owner_id: int) -> None:
         await self.conn.execute(

@@ -67,7 +67,7 @@ TempVoice (join-to-create voice channels, replaces the third-party TempVoice bot
 - `/voice kick <member>` — remove someone from your temp channel
 - `/voice claim` — take ownership of a temp channel whose owner has left (only works if the owner isn't still in it)
 
-All of the above are also buttons (Lock/Unlock/Rename/Limit/Claim) on a control panel posted automatically in each new temp channel's own chat. The channel owner also gets Manage Channel + Move Members on their channel directly, so Discord's native channel settings work too. Joining the configured trigger voice channel creates a new temp channel under the configured category and moves you into it; it's deleted automatically once everyone leaves. Set up with `/voice setup` (Admin, below).
+All of the above are also buttons (Lock/Unlock/Rename/Limit/Claim) on a live dashboard posted automatically in each new temp channel's own chat, showing the owner, lock status, user limit, and current members — edited in place whenever any of that changes, not just posted once. The channel owner also gets Manage Channel + Move Members on their channel directly, so Discord's native channel settings work too. Joining the configured trigger voice channel creates a new temp channel under the configured category and moves you into it; it's deleted automatically once everyone leaves. Set up with `/voice setup` (Admin, below).
 
 ## Admin
 

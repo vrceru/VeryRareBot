@@ -16,7 +16,7 @@ AVATAR_DIAMETER = 320
 AVATAR_CENTER = (224, 573)
 BORDER_WIDTH = 8
 BORDER_COLOR = (255, 255, 255, 255)
-BACKGROUND_COLOR = (255, 255, 255, 255)
+BACKGROUND_COLOR = (0, 0, 0, 0)
 
 
 def _circular_avatar(avatar_bytes: bytes, diameter: int) -> Image.Image:
@@ -50,7 +50,7 @@ def render_card(avatar_bytes: bytes) -> bytes:
     canvas.alpha_composite(template)
 
     buffer = io.BytesIO()
-    canvas.convert("RGB").save(buffer, format="PNG")
+    canvas.save(buffer, format="PNG")
     return buffer.getvalue()
 
 

@@ -59,6 +59,56 @@ async def _get_owned_temp_channel(bot: commands.Bot, interaction: discord.Intera
     return temp, channel
 
 
+def build_panel_embed(channel: discord.VoiceChannel, owner_id: int) -> discord.Embed:
+    overwrite = channel.overwrites_for(channel.guild.default_role)
+    locked = overwrite.connect is False
+    humans = [m for m in channel.members if not m.bot]
+
+    embed = tempvoice_embed(channel.name)
+    embed.add_field(name="Owner", value=f"<@{owner_id}>", inline=True)
+    embed.add_field(name="Status", value="🔒 Locked" if locked else "🔓 Unlocked", inline=True)
+    embed.add_field(name="User Limit", value="Unlimited" if channel.user_limit == 0 else str(channel.user_limit), inline=True)
+
+    members_value = "\n".join(m.mention for m in humans[:10]) or "*(empty)*"
+    if len(humans) > 10:
+        members_value += f"\n…and {len(humans) - 10} more."
+    embed.add_field(name=f"Members ({len(humans)})", value=members_value, inline=False)
+
+    embed.set_footer(text="Use the buttons below to manage this channel, or Discord's own channel settings.")
+    return embed
+
+
+async def refresh_panel(bot: commands.Bot, channel: discord.VoiceChannel) -> None:
+    """Post or edit this channel's dashboard so it reflects current state."""
+
+    temp = await bot.db.get_tempvoice_channel(channel.id)
+    if temp is None:
+        return
+
+    embed = build_panel_embed(channel, temp["owner_id"])
+    view = TempVoiceControlView(bot)
+
+    message = None
+    if temp["panel_message_id"]:
+        try:
+            message = await channel.fetch_message(temp["panel_message_id"])
+        except discord.HTTPException:
+            message = None
+
+    if message is not None:
+        try:
+            await message.edit(embed=embed, view=view)
+            return
+        except discord.HTTPException:
+            pass
+
+    try:
+        new_message = await channel.send(embed=embed, view=view)
+        await bot.db.set_tempvoice_panel_message(channel.id, new_message.id)
+    except discord.HTTPException:
+        logger.warning("Failed to post the dashboard for temp channel %s.", channel.id)
+
+
 async def do_lock(bot: commands.Bot, interaction: discord.Interaction) -> None:
     result = await _get_owned_temp_channel(bot, interaction)
     if result is None:
@@ -67,6 +117,7 @@ async def do_lock(bot: commands.Bot, interaction: discord.Interaction) -> None:
     overwrite = channel.overwrites_for(interaction.guild.default_role)
     overwrite.connect = False
     await channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+    await refresh_panel(bot, channel)
     await _reply(interaction, success_embed("Channel Locked", "New members can no longer join."))
 
 
@@ -78,6 +129,7 @@ async def do_unlock(bot: commands.Bot, interaction: discord.Interaction) -> None
     overwrite = channel.overwrites_for(interaction.guild.default_role)
     overwrite.connect = None
     await channel.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+    await refresh_panel(bot, channel)
     await _reply(interaction, success_embed("Channel Unlocked", "Anyone can join again."))
 
 
@@ -88,6 +140,7 @@ async def do_rename(bot: commands.Bot, interaction: discord.Interaction, name: s
     _, channel = result
     name = name.strip()[:100] or channel.name
     await channel.edit(name=name)
+    await refresh_panel(bot, channel)
     await _reply(interaction, success_embed("Renamed", f"Channel renamed to **{name}**."))
 
 
@@ -97,6 +150,7 @@ async def do_limit(bot: commands.Bot, interaction: discord.Interaction, limit: i
         return
     _, channel = result
     await channel.edit(user_limit=limit)
+    await refresh_panel(bot, channel)
     await _reply(interaction, success_embed("Limit Updated", f"User limit set to {'unlimited' if limit == 0 else limit}."))
 
 
@@ -121,6 +175,7 @@ async def do_claim(bot: commands.Bot, interaction: discord.Interaction) -> None:
     overwrite.manage_channels = True
     overwrite.move_members = True
     await channel.set_permissions(member, overwrite=overwrite)
+    await refresh_panel(bot, channel)
     await _reply(interaction, success_embed("Ownership Claimed", f"{member.mention} is now the owner of this channel."))
 
 
@@ -212,23 +267,25 @@ class TempVoice(commands.Cog):
                 overwrites=overwrites,
                 reason=f"Temp voice channel for {member} ({member.id})",
             )
-            await member.move_to(channel, reason="Joined the create-a-channel trigger.")
         except discord.HTTPException:
             logger.exception("Failed to create a temp voice channel for %s", member)
             return
 
         await self.bot.db.create_tempvoice_channel(channel.id, guild.id, member.id)
+        # Post the dashboard before moving the member in, so the move's own
+        # on_voice_state_update (which also calls refresh_panel) edits this message
+        # instead of racing to create a second one.
+        await refresh_panel(self.bot, channel)
 
-        embed = tempvoice_embed(
-            f"{member.display_name}'s Channel",
-            "This is your temporary voice channel. Use the buttons below to manage it, or right-click "
-            "the channel for Discord's own settings (you have Manage Channel access here). "
-            "It's deleted automatically once everyone leaves.",
-        )
         try:
-            await channel.send(embed=embed, view=TempVoiceControlView(self.bot))
+            await member.move_to(channel, reason="Joined the create-a-channel trigger.")
         except discord.HTTPException:
-            logger.warning("Failed to post the control panel in temp channel %s.", channel.id)
+            logger.warning("Failed to move %s into their new temp channel; cleaning it up.", member)
+            await self.bot.db.delete_tempvoice_channel(channel.id)
+            try:
+                await channel.delete(reason="Failed to move the creating member in.")
+            except discord.HTTPException:
+                pass
 
     @admin_access()
     @voice.command(name="setup", description="Configure the join-to-create trigger channel.")
@@ -322,15 +379,22 @@ class TempVoice(commands.Cog):
             config = await self.bot.db.get_tempvoice_config(member.guild.id)
             if config and after.channel.id == config["trigger_channel_id"]:
                 await self._create_temp_channel(member, config)
+            else:
+                temp = await self.bot.db.get_tempvoice_channel(after.channel.id)
+                if temp is not None:
+                    await refresh_panel(self.bot, after.channel)
 
         if before.channel is not None and before.channel != after.channel:
             temp = await self.bot.db.get_tempvoice_channel(before.channel.id)
-            if temp is not None and not any(not m.bot for m in before.channel.members):
-                try:
-                    await before.channel.delete(reason="Temp voice channel is empty.")
-                except discord.HTTPException:
-                    logger.warning("Failed to delete empty temp voice channel %s.", before.channel.id)
-                await self.bot.db.delete_tempvoice_channel(before.channel.id)
+            if temp is not None:
+                if any(not m.bot for m in before.channel.members):
+                    await refresh_panel(self.bot, before.channel)
+                else:
+                    try:
+                        await before.channel.delete(reason="Temp voice channel is empty.")
+                    except discord.HTTPException:
+                        logger.warning("Failed to delete empty temp voice channel %s.", before.channel.id)
+                    await self.bot.db.delete_tempvoice_channel(before.channel.id)
 
 
 async def setup(bot: commands.Bot):

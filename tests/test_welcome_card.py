@@ -20,11 +20,17 @@ class RenderCardTests(unittest.TestCase):
         self.assertEqual(image.format, "PNG")
         self.assertEqual(image.size, CANVAS_SIZE)
 
-    def test_output_has_no_transparency(self):
-        # The card is meant to render as a solid white card, matching the source asset.
+    def test_background_is_transparent(self):
         png_bytes = render_card(make_avatar_bytes())
-        image = Image.open(io.BytesIO(png_bytes))
-        self.assertEqual(image.mode, "RGB")
+        image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        self.assertEqual(image.getpixel((0, 0))[3], 0)  # alpha channel at a corner
+
+    def test_avatar_and_border_are_opaque(self):
+        from services.welcome_card import AVATAR_CENTER
+
+        png_bytes = render_card(make_avatar_bytes())
+        image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        self.assertEqual(image.getpixel(AVATAR_CENTER)[3], 255)
 
     def test_avatar_color_appears_near_its_placement_center(self):
         from services.welcome_card import AVATAR_CENTER

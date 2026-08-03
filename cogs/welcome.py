@@ -23,20 +23,27 @@ class Welcome(commands.Cog):
         if channel is None:
             return
 
-        content = f"{member.mention} Welcome to {member.guild.name} we are now at {member.guild.member_count} Members!!!"
+        announcement = f"Welcome to {member.guild.name} we are now at {member.guild.member_count} Members!!!"
 
         try:
             file = await generate_welcome_card(member)
         except Exception:
             logger.exception("Failed to generate a welcome card for %s; falling back to text only.", member)
             try:
-                await channel.send(content=content)
+                await channel.send(content=f"{member.mention} {announcement}")
             except discord.HTTPException:
                 logger.warning("Failed to send the fallback welcome message.")
             return
 
+        # The mention stays in plain content so it actually notifies the member (mentions
+        # inside embeds render as clickable links but don't trigger a ping); the announcement
+        # line goes in the embed footer so it renders under the picture instead of above it.
+        embed = discord.Embed()
+        embed.set_image(url="attachment://welcome.png")
+        embed.set_footer(text=announcement)
+
         try:
-            await channel.send(content=content, file=file)
+            await channel.send(content=member.mention, embed=embed, file=file)
         except discord.HTTPException:
             logger.warning("Failed to send the welcome card.")
 
