@@ -11,8 +11,7 @@ def has_role(
     if not interaction.guild or not role_id:
         return False
 
-    configured_roles = [role_id for role_id in role_ids if role_id]
-    return bool(configured_roles) and any(
+    return any(
         role.id == role_id
         for role in interaction.user.roles
     )
@@ -23,7 +22,9 @@ def has_any_role(
     role_ids: list[int]
 ):
 
-    return any(
+    configured_roles = [role_id for role_id in role_ids if role_id]
+
+    return bool(configured_roles) and any(
         has_role(
             interaction,
             role_id
