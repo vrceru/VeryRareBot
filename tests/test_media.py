@@ -7,6 +7,7 @@ from cogs.media import (
     STATUS_LABELS,
     TRANSITIONS,
     MediaActionButton,
+    ReleaseCandidateSelect,
     VRMSGateButton,
     _find_top_release_candidate,
     build_final_gate_embed,
@@ -106,6 +107,34 @@ class VRMSGateButtonTemplateTests(unittest.TestCase):
     def test_gate_view_has_two_buttons(self):
         view = build_gate_view("final", 1)
         self.assertEqual(len(view.children), 2)
+
+    def test_release_gate_view_adds_picker_with_multiple_candidates(self):
+        candidates = [{"id": "a", "title": "A", "parsed": {}}, {"id": "b", "title": "B", "parsed": {}}]
+        view = build_gate_view("release", 1, candidates, "a")
+        self.assertEqual(len(view.children), 3)
+        self.assertIsInstance(view.children[0], ReleaseCandidateSelect)
+
+    def test_release_gate_view_skips_picker_with_one_or_no_candidates(self):
+        view = build_gate_view("release", 1, [{"id": "a", "title": "A", "parsed": {}}], "a")
+        self.assertEqual(len(view.children), 2)
+        view = build_gate_view("release", 1, [], None)
+        self.assertEqual(len(view.children), 2)
+
+    def test_release_candidate_select_marks_auto_selected_default(self):
+        candidates = [
+            {"id": "a", "title": "Season 1", "parsed": {"season": 1}, "seeders": 10},
+            {"id": "b", "title": "Season 2", "parsed": {"season": 2}, "seeders": 20},
+        ]
+        select = ReleaseCandidateSelect(1, candidates, "b")
+        self.assertFalse(select.options[0].default)
+        self.assertTrue(select.options[1].default)
+        self.assertIn("S02", select.options[1].description)
+
+    def test_release_candidate_select_resolves_index_to_candidate_id(self):
+        candidates = [{"id": "magnet:a", "title": "A", "parsed": {}}, {"id": "magnet:b", "title": "B", "parsed": {}}]
+        select = ReleaseCandidateSelect(1, candidates, None)
+        chosen = select.candidates[int(select.options[1].value)]
+        self.assertEqual(chosen["id"], "magnet:b")
 
 
 class VRMSGateEmbedTests(unittest.TestCase):

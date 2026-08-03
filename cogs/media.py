@@ -284,20 +284,25 @@ def _find_top_release_candidate(release_entry: dict | None) -> dict | None:
     return candidates[0] if candidates else None
 
 
-def build_release_gate_embed(title: str, candidate: dict | None) -> discord.Embed:
+def build_release_gate_embed(title: str, candidate: dict | None, candidate_count: int = 0) -> discord.Embed:
     embed = make_embed("VRMS: Approve Release?", title, color=GATE_COLOR)
     if candidate is None:
         embed.add_field(name="Candidates", value="No candidate releases were found.", inline=False)
     else:
         parsed = candidate.get("parsed") or {}
-        embed.add_field(name="Release", value=(candidate.get("title") or "Unknown")[:1024], inline=False)
+        embed.add_field(name="Auto-Selected Release", value=(candidate.get("title") or "Unknown")[:1024], inline=False)
+        if parsed.get("season") is not None:
+            embed.add_field(name="Season", value=str(parsed["season"]), inline=True)
         if parsed.get("resolution"):
             embed.add_field(name="Resolution", value=parsed["resolution"], inline=True)
         if parsed.get("source"):
             embed.add_field(name="Source", value=parsed["source"], inline=True)
         if candidate.get("seeders") is not None:
             embed.add_field(name="Seeders", value=str(candidate["seeders"]), inline=True)
-    embed.set_footer(text="Approving keeps VRMS's auto-selected release.")
+    if candidate_count > 1:
+        embed.set_footer(text=f"{candidate_count} releases found — approve VRMS's pick, or use the dropdown below to choose a different one (e.g. another season).")
+    else:
+        embed.set_footer(text="Approving keeps VRMS's auto-selected release.")
     return embed
 
 
@@ -318,14 +323,20 @@ def build_final_gate_embed(title: str, entry: dict) -> discord.Embed:
     return embed
 
 
-def build_gate_view(gate: str, request_id: int) -> discord.ui.View:
+def build_gate_view(
+    gate: str, request_id: int, candidates: list[dict] | None = None, auto_selected_id: str | None = None
+) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
+    if gate == "release" and candidates and len(candidates) > 1:
+        view.add_item(ReleaseCandidateSelect(request_id, candidates, auto_selected_id))
     view.add_item(VRMSGateButton(gate, "approve", request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅"))
     view.add_item(VRMSGateButton(gate, "deny", request_id, label="Deny", style=discord.ButtonStyle.danger, emoji="❌"))
     return view
 
 
-async def apply_vrms_gate_action(interaction: discord.Interaction, gate: str, action: str, request_id: int) -> None:
+async def apply_vrms_gate_action(
+    interaction: discord.Interaction, gate: str, action: str, request_id: int, candidate_id: str | None = None
+) -> None:
     bot = interaction.client
     request = await bot.db.get_media_request(request_id)
 
@@ -344,7 +355,10 @@ async def apply_vrms_gate_action(interaction: discord.Interaction, gate: str, ac
 
     try:
         if gate == "release":
-            await (client.approve_release(request["vrms_job_id"]) if action == "approve" else client.deny_release(request["vrms_job_id"]))
+            if action == "approve":
+                await client.approve_release(request["vrms_job_id"], candidate_id)
+            else:
+                await client.deny_release(request["vrms_job_id"])
         else:
             await (client.approve_final(request["vrms_job_id"]) if action == "approve" else client.deny_final(request["vrms_job_id"]))
     except VRMSAPIError as exc:
@@ -398,6 +412,41 @@ class VRMSGateButton(
 
     async def callback(self, interaction: discord.Interaction):
         await apply_vrms_gate_action(interaction, self.gate, self.action, self.request_id)
+
+
+class ReleaseCandidateSelect(discord.ui.Select):
+    """Lets staff pick a different release than VRMS's auto-selected one (e.g. a different
+    season) right from the release-approval gate card. Unlike VRMSGateButton this isn't
+    restart-persistent -- a bot restart before staff picks one just means the dropdown goes
+    dead, while the Approve/Deny buttons alongside it (which keep VRMS's own auto-pick) still
+    work as the reliable fallback."""
+
+    def __init__(self, request_id: int, candidates: list[dict], auto_selected_id: str | None):
+        self.request_id = request_id
+        self.candidates = candidates[:25]
+        options = []
+        for i, candidate in enumerate(self.candidates):
+            parsed = candidate.get("parsed") or {}
+            bits = []
+            if parsed.get("season") is not None:
+                bits.append(f"S{int(parsed['season']):02d}")
+            if parsed.get("resolution"):
+                bits.append(parsed["resolution"])
+            if candidate.get("seeders") is not None:
+                bits.append(f"{candidate['seeders']} seeders")
+            options.append(
+                discord.SelectOption(
+                    label=(candidate.get("title") or "Unknown")[:100],
+                    value=str(i),
+                    description=" • ".join(bits)[:100] or None,
+                    default=candidate.get("id") == auto_selected_id,
+                )
+            )
+        super().__init__(placeholder="Pick a different release…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        chosen = self.candidates[int(self.values[0])]
+        await apply_vrms_gate_action(interaction, "release", "approve", self.request_id, candidate_id=chosen["id"])
 
 
 class QueueBrowserView(discord.ui.View):
@@ -523,11 +572,17 @@ class Media(commands.Cog):
         if channel is None:
             return
 
+        candidates: list[dict] = []
+        auto_selected_id: str | None = None
         try:
             if gate == "release":
                 entries = await client.list_release_approvals()
                 entry = next((e for e in entries if e["id"] == row["vrms_job_id"]), None)
-                embed = build_release_gate_embed(row["title"], _find_top_release_candidate(entry))
+                candidates = sorted(
+                    (entry or {}).get("candidates") or [], key=lambda c: c.get("seeders") or 0, reverse=True
+                )
+                auto_selected_id = (entry or {}).get("autoSelectedId")
+                embed = build_release_gate_embed(row["title"], _find_top_release_candidate(entry), len(candidates))
             else:
                 entries = await client.list_final_approvals()
                 entry = next((e for e in entries if e["id"] == row["vrms_job_id"]), None)
@@ -537,7 +592,9 @@ class Media(commands.Cog):
             return
 
         try:
-            message = await channel.send(embed=embed, view=build_gate_view(gate, row["id"]))
+            message = await channel.send(
+                embed=embed, view=build_gate_view(gate, row["id"], candidates, auto_selected_id)
+            )
         except discord.HTTPException:
             logger.warning("Failed to post the VRMS %s gate card for request #%s.", gate, row["id"])
             return
