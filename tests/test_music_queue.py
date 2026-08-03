@@ -75,6 +75,46 @@ class GuildQueueTests(unittest.TestCase):
         self.assertEqual(queue.advance().title, "a")
         self.assertEqual(queue.advance().title, "b")
 
+    def test_no_previous_track_initially(self):
+        queue = GuildQueue(max_size=10, default_volume=0.5)
+        self.assertFalse(queue.has_previous())
+        self.assertIsNone(queue.go_back())
+
+    def test_go_back_returns_to_previous_track(self):
+        queue = GuildQueue(max_size=10, default_volume=0.5)
+        queue.enqueue_many([make_track("a"), make_track("b"), make_track("c")])
+        queue.advance()  # -> a
+        queue.advance()  # -> b
+        self.assertTrue(queue.has_previous())
+        self.assertEqual(queue.go_back().title, "a")
+        # "b" should be back at the front of the upcoming queue.
+        self.assertEqual([t.title for t in queue.upcoming], ["b", "c"])
+
+    def test_go_back_then_advance_replays_forward_correctly(self):
+        queue = GuildQueue(max_size=10, default_volume=0.5)
+        queue.enqueue_many([make_track("a"), make_track("b")])
+        queue.advance()  # -> a
+        queue.advance()  # -> b
+        queue.go_back()  # -> a, b requeued
+        self.assertEqual(queue.advance().title, "b")
+
+    def test_track_loop_does_not_record_history_on_repeat(self):
+        queue = GuildQueue(max_size=10, default_volume=0.5)
+        queue.enqueue_many([make_track("a"), make_track("b")])
+        queue.loop_mode = LoopMode.TRACK
+        queue.advance()  # -> a
+        queue.advance()  # repeats a, no history entry
+        self.assertFalse(queue.has_previous())
+
+    def test_clear_resets_history(self):
+        queue = GuildQueue(max_size=10, default_volume=0.5)
+        queue.enqueue_many([make_track("a"), make_track("b")])
+        queue.advance()
+        queue.advance()
+        self.assertTrue(queue.has_previous())
+        queue.clear()
+        self.assertFalse(queue.has_previous())
+
 
 if __name__ == "__main__":
     unittest.main()

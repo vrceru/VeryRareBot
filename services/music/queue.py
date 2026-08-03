@@ -7,6 +7,7 @@ from services.music.base import MusicProviderError, Track
 
 MIN_VOLUME = 0.0
 MAX_VOLUME = 2.0
+HISTORY_LIMIT = 20
 
 
 class LoopMode(Enum):
@@ -24,6 +25,7 @@ class GuildQueue:
         self.loop_mode = LoopMode.OFF
         self.current: Track | None = None
         self._upcoming: list[Track] = []
+        self._history: list[Track] = []
 
     def __len__(self) -> int:
         return len(self._upcoming)
@@ -58,10 +60,27 @@ class GuildQueue:
 
     def clear(self) -> None:
         self._upcoming.clear()
+        self._history.clear()
 
     def set_volume(self, value: float) -> float:
         self.volume = max(MIN_VOLUME, min(MAX_VOLUME, value))
         return self.volume
+
+    def has_previous(self) -> bool:
+        return bool(self._history)
+
+    def go_back(self) -> Track | None:
+        """Move the last history entry back into `current`, pushing whatever was
+        playing back onto the front of the upcoming queue."""
+
+        if not self._history:
+            return None
+
+        if self.current is not None:
+            self._upcoming.insert(0, self.current)
+
+        self.current = self._history.pop()
+        return self.current
 
     def advance(self, *, forced: bool = False) -> Track | None:
         """Move to the next track. `forced` is True for an explicit /skip, which
@@ -71,6 +90,11 @@ class GuildQueue:
             return self.current
 
         previous = self.current
+        if previous is not None:
+            self._history.append(previous)
+            if len(self._history) > HISTORY_LIMIT:
+                self._history.pop(0)
+
         if self.loop_mode == LoopMode.QUEUE and previous:
             self._upcoming.append(previous)
 

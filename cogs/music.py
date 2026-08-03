@@ -4,7 +4,7 @@ from discord.ext import commands
 
 from core.embed import error_embed, music_embed, success_embed
 from services.music import MusicProviderError
-from services.music.player import MusicPlayerManager
+from services.music.player import GuildPlayer, MusicPlayerManager
 from services.music.queue import LoopMode
 from services.music.registry import PROVIDERS, resolve_provider
 
@@ -32,6 +32,96 @@ def format_duration(seconds: int | None) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+LOOP_BUTTON_LABELS = {
+    LoopMode.OFF: "🔁 Loop: Off",
+    LoopMode.TRACK: "🔂 Loop: Track",
+    LoopMode.QUEUE: "🔁 Loop: Queue",
+}
+LOOP_ORDER = [LoopMode.OFF, LoopMode.TRACK, LoopMode.QUEUE]
+
+
+def build_now_playing_embed(player: GuildPlayer) -> discord.Embed:
+    track = player.queue.current
+    if track is None:
+        return music_embed("Nothing Playing", "The queue is empty. Use `/music play` to add something.")
+
+    is_paused = player.voice_client is not None and player.voice_client.is_paused()
+    status = "⏸️ Paused" if is_paused else "▶️ Now Playing"
+    embed = music_embed(f"{status} — {track.title}")
+    embed.add_field(name="Source", value=track.source, inline=True)
+    embed.add_field(name="Duration", value=format_duration(track.duration), inline=True)
+    embed.add_field(name="Requested By", value=f"<@{track.requester_id}>", inline=True)
+    if track.artist:
+        embed.add_field(name="Artist", value=track.artist, inline=True)
+    embed.add_field(name="Loop", value=player.queue.loop_mode.value.title(), inline=True)
+    embed.add_field(name="Volume", value=f"{int(player.queue.volume * 100)}%", inline=True)
+
+    upcoming = player.queue.upcoming[:3]
+    if upcoming:
+        lines = [f"{i}. {t.title}" for i, t in enumerate(upcoming, start=1)]
+        embed.add_field(name="Up Next", value="\n".join(lines), inline=False)
+
+    if track.thumbnail:
+        embed.set_thumbnail(url=track.thumbnail)
+    return embed
+
+
+class NowPlayingView(discord.ui.View):
+    """The mini music player attached to the Now Playing card: previous/pause/skip/loop."""
+
+    def __init__(self, player: GuildPlayer):
+        super().__init__(timeout=None)
+        self.player = player
+        self._sync()
+
+    def _sync(self) -> None:
+        has_track = self.player.queue.current is not None
+        self.previous_button.disabled = not self.player.queue.has_previous()
+        self.skip_button.disabled = not has_track
+        self.pause_button.disabled = not has_track
+
+        is_paused = self.player.voice_client is not None and self.player.voice_client.is_paused()
+        self.pause_button.label = "Resume" if is_paused else "Pause"
+        self.pause_button.emoji = "▶️" if is_paused else "⏸️"
+        self.loop_button.label = LOOP_BUTTON_LABELS[self.player.queue.loop_mode]
+
+    @discord.ui.button(label="Previous", emoji="⏮️", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.player.previous():
+            await interaction.response.send_message(embed=error_embed("No Previous Track", "There's nothing to go back to."), ephemeral=True)
+            return
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.primary)
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.player.voice_client and self.player.voice_client.is_paused():
+            self.player.resume()
+        else:
+            self.player.pause()
+        self._sync()
+        await interaction.response.edit_message(embed=build_now_playing_embed(self.player), view=self)
+
+    @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.secondary)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.player.skip():
+            await interaction.response.send_message(embed=error_embed("Nothing Playing", "There's nothing to skip."), ephemeral=True)
+            return
+        await interaction.response.defer()
+
+    @discord.ui.button(label="🔁 Loop: Off", style=discord.ButtonStyle.secondary)
+    async def loop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        current_index = LOOP_ORDER.index(self.player.queue.loop_mode)
+        self.player.queue.loop_mode = LOOP_ORDER[(current_index + 1) % len(LOOP_ORDER)]
+        self._sync()
+        await interaction.response.edit_message(embed=build_now_playing_embed(self.player), view=self)
+
+
+def render_now_playing(player: GuildPlayer) -> tuple[discord.Embed, discord.ui.View]:
+    embed = build_now_playing_embed(player)
+    view = NowPlayingView(player) if player.queue.current is not None else discord.ui.View()
+    return embed, view
+
+
 class Music(commands.Cog):
     """Multi-source music playback: YouTube, SoundCloud, and VeryRare media."""
 
@@ -40,7 +130,7 @@ class Music(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.players = MusicPlayerManager(bot, lambda source: PROVIDERS[source])
+        self.players = MusicPlayerManager(bot, lambda source: PROVIDERS[source], render_now_playing)
 
     async def cog_unload(self) -> None:
         for guild in list(self.bot.guilds):
@@ -189,6 +279,7 @@ class Music(commands.Cog):
             await interaction.response.send_message(embed=error_embed("Nothing Playing", "There's nothing to pause."), ephemeral=True)
             return
         player.pause()
+        await player.refresh_now_playing_card()
         await interaction.response.send_message(embed=success_embed("Paused"), ephemeral=True)
 
     @music.command(name="resume", description="Resume playback.")
@@ -198,6 +289,7 @@ class Music(commands.Cog):
             await interaction.response.send_message(embed=error_embed("Not Connected", "I'm not in a voice channel."), ephemeral=True)
             return
         player.resume()
+        await player.refresh_now_playing_card()
         await interaction.response.send_message(embed=success_embed("Resumed"), ephemeral=True)
 
     @music.command(name="stop", description="Stop playback and clear the queue.")
@@ -218,6 +310,14 @@ class Music(commands.Cog):
         skipped_title = player.queue.current.title if player.queue.current else "the current track"
         await player.skip()
         await interaction.response.send_message(embed=success_embed("Skipped", f"Skipped **{skipped_title}**."), ephemeral=True)
+
+    @music.command(name="previous", description="Go back to the previous track.")
+    async def previous(self, interaction: discord.Interaction):
+        player = self._require_player(interaction)
+        if not player or not await player.previous():
+            await interaction.response.send_message(embed=error_embed("No Previous Track", "There's nothing to go back to."), ephemeral=True)
+            return
+        await interaction.response.send_message(embed=success_embed("Going Back"), ephemeral=True)
 
     @music.command(name="queue", description="Show the current queue.")
     async def queue(self, interaction: discord.Interaction):
@@ -271,6 +371,7 @@ class Music(commands.Cog):
             await interaction.response.send_message(embed=error_embed("Not Connected", "I'm not in a voice channel."), ephemeral=True)
             return
         player.queue.loop_mode = LoopMode(mode.value)
+        await player.refresh_now_playing_card()
         await interaction.response.send_message(embed=success_embed("Loop Updated", f"Loop mode set to **{mode.name}**."), ephemeral=True)
 
     @music.command(name="volume", description="Set playback volume (0-200%).")
@@ -282,24 +383,18 @@ class Music(commands.Cog):
             return
         new_volume = player.queue.set_volume(percent / 100)
         player.apply_volume()
+        await player.refresh_now_playing_card()
         await interaction.response.send_message(embed=success_embed("Volume Updated", f"Volume set to **{int(new_volume * 100)}%**."), ephemeral=True)
 
-    @music.command(name="nowplaying", description="Show the currently playing track.")
+    @music.command(name="nowplaying", description="Show the currently playing track and controls.")
     async def now_playing(self, interaction: discord.Interaction):
         player = self._require_player(interaction)
         if not player or not player.queue.current:
             await interaction.response.send_message(embed=error_embed("Nothing Playing", "Nothing is currently playing."), ephemeral=True)
             return
-        track = player.queue.current
-        embed = music_embed("Now Playing", track.title)
-        embed.add_field(name="Source", value=track.source, inline=True)
-        embed.add_field(name="Duration", value=format_duration(track.duration), inline=True)
-        embed.add_field(name="Requested By", value=f"<@{track.requester_id}>", inline=True)
-        if track.artist:
-            embed.add_field(name="Artist", value=track.artist, inline=True)
-        if track.thumbnail:
-            embed.set_thumbnail(url=track.thumbnail)
-        await interaction.response.send_message(embed=embed)
+        embed, view = render_now_playing(player)
+        await interaction.response.send_message(embed=embed, view=view)
+        player.now_playing_message = await interaction.original_response()
 
     @playlist.command(name="save", description="Save the current queue as a personal playlist.")
     @app_commands.describe(name="A name to save this playlist under.")

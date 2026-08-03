@@ -11,21 +11,30 @@ from typing import Callable
 import discord
 
 from config import settings
-from services.music.base import MusicProvider, MusicProviderError, Track
+from services.music.base import MusicProvider, MusicProviderError
 from services.music.queue import GuildQueue
 
 logger = logging.getLogger("VeryRareBot")
 
 ProviderLookup = Callable[[str], MusicProvider]
+NowPlayingRenderer = Callable[["GuildPlayer"], tuple[discord.Embed, discord.ui.View]]
 
 
 class GuildPlayer:
     """Owns one guild's voice connection, queue, and playback state."""
 
-    def __init__(self, bot: discord.Client, guild_id: int, provider_lookup: ProviderLookup):
+    def __init__(
+        self,
+        bot: discord.Client,
+        guild_id: int,
+        provider_lookup: ProviderLookup,
+        now_playing_renderer: NowPlayingRenderer | None = None,
+    ):
         self.bot = bot
         self.guild_id = guild_id
         self.provider_lookup = provider_lookup
+        self.now_playing_renderer = now_playing_renderer
+        self.now_playing_message: discord.Message | None = None
         self.queue = GuildQueue(settings.MUSIC_MAX_QUEUE_SIZE, settings.MUSIC_DEFAULT_VOLUME)
         self.voice_client: discord.VoiceClient | None = None
         self.text_channel: discord.abc.Messageable | None = None
@@ -33,6 +42,7 @@ class GuildPlayer:
         self._lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
         self._skip_requested = False
+        self._go_back_requested = False
         self._suppress_after = False
 
     @property
@@ -58,6 +68,7 @@ class GuildPlayer:
         self.voice_client = None
         self.queue.clear()
         self.queue.current = None
+        self.now_playing_message = None
 
     def pause(self) -> None:
         if self.voice_client and self.voice_client.is_playing():
@@ -80,6 +91,7 @@ class GuildPlayer:
             self._suppress_after = True
             self.voice_client.stop()
         self._start_idle_timer()
+        await self.refresh_now_playing_card()
 
     async def skip(self) -> bool:
         if not self.voice_client or not (self.voice_client.is_playing() or self.voice_client.is_paused()):
@@ -88,31 +100,41 @@ class GuildPlayer:
         self.voice_client.stop()
         return True
 
+    async def previous(self) -> bool:
+        if not self.voice_client or not self.voice_client.is_connected() or not self.queue.has_previous():
+            return False
+        self._go_back_requested = True
+        if self.voice_client.is_playing() or self.voice_client.is_paused():
+            self.voice_client.stop()
+        else:
+            await self.play_next()
+        return True
+
     async def play_next(self) -> None:
         async with self._lock:
             if not self.voice_client or not self.voice_client.is_connected():
                 return
 
+            go_back = self._go_back_requested
+            self._go_back_requested = False
             forced = self._skip_requested
             self._skip_requested = False
 
-            track: Track | None = None
-            while True:
-                track = self.queue.advance(forced=forced)
-                forced = False
-                if track is None:
-                    break
+            track = self.queue.go_back() if go_back else self.queue.advance(forced=forced)
+            stream_url: str | None = None
+            while track is not None:
                 try:
                     stream_url = await self.provider_lookup(track.source).stream_url(track)
+                    break
                 except MusicProviderError as exc:
                     logger.warning("Skipping unplayable track %r: %s", track.title, exc)
                     if self.text_channel:
                         await self.text_channel.send(f"Skipping **{track.title}** — {exc}")
-                    continue
-                break
+                    track = self.queue.advance(forced=True)
 
             if track is None:
                 self._start_idle_timer()
+                await self.refresh_now_playing_card()
                 return
 
             self._cancel_idle_timer()
@@ -124,6 +146,27 @@ class GuildPlayer:
             )
             volume_source = discord.PCMVolumeTransformer(source, volume=self.queue.volume)
             self.voice_client.play(volume_source, after=self._make_after_callback())
+            await self.refresh_now_playing_card()
+
+    async def refresh_now_playing_card(self) -> None:
+        """Post or edit the persistent Now Playing card to reflect current state."""
+
+        if self.now_playing_renderer is None or self.text_channel is None:
+            return
+
+        embed, view = self.now_playing_renderer(self)
+
+        if self.now_playing_message is not None:
+            try:
+                await self.now_playing_message.edit(embed=embed, view=view)
+                return
+            except discord.HTTPException:
+                self.now_playing_message = None
+
+        try:
+            self.now_playing_message = await self.text_channel.send(embed=embed, view=view)
+        except discord.HTTPException:
+            logger.warning("Failed to post the now-playing card in guild %s", self.guild_id)
 
     def _make_after_callback(self):
         loop = self.bot.loop
@@ -168,15 +211,21 @@ class GuildPlayer:
 class MusicPlayerManager:
     """Holds one GuildPlayer per guild."""
 
-    def __init__(self, bot: discord.Client, provider_lookup: ProviderLookup):
+    def __init__(
+        self,
+        bot: discord.Client,
+        provider_lookup: ProviderLookup,
+        now_playing_renderer: NowPlayingRenderer | None = None,
+    ):
         self.bot = bot
         self.provider_lookup = provider_lookup
+        self.now_playing_renderer = now_playing_renderer
         self._players: dict[int, GuildPlayer] = {}
 
     def get(self, guild_id: int) -> GuildPlayer:
         player = self._players.get(guild_id)
         if player is None:
-            player = GuildPlayer(self.bot, guild_id, self.provider_lookup)
+            player = GuildPlayer(self.bot, guild_id, self.provider_lookup, self.now_playing_renderer)
             self._players[guild_id] = player
         return player
 

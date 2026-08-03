@@ -28,13 +28,15 @@ Music (open to any member — no separate DJ role):
 - `/music join` — connect the bot to your voice channel. **Required first step** — `/music play` and `/music playlist load` won't auto-connect; they'll tell you to run this first if the bot isn't already in your channel.
 - `/music play <query> [source]` — search or queue a URL from YouTube, SoundCloud, or VeryRare media (Jellyfin); auto-detects the source from the query unless `source` is given. Requires the bot to already be connected via `/music join`.
 - `/music search <query> [source]` — preview results without queueing
-- `/music pause` / `/music resume` / `/music stop` / `/music skip`
+- `/music pause` / `/music resume` / `/music stop` / `/music skip` / `/music previous`
 - `/music queue` — what's playing and what's up next
 - `/music remove <position>` — remove a track from the queue by its `/music queue` position
 - `/music shuffle` — shuffle the upcoming queue
 - `/music loop <off|track|queue>`
 - `/music volume <0-200>`
-- `/music nowplaying`
+- `/music nowplaying` — posts (or re-posts) the interactive Now Playing card
+
+Whenever something starts playing, the bot posts a **Now Playing card** with Previous/Pause-Resume/Skip/Loop buttons, and edits that same message in place as the track changes, gets paused, or loops — so most playback control doesn't need typed commands at all. It's tied to a single live player per server, not preserved across a bot restart (a restart naturally interrupts voice anyway).
 - `/music leave`
 - `/music playlist save <name>` — save the current queue
 - `/music playlist load <name>` — queue a saved playlist. Also requires `/music join` first.
