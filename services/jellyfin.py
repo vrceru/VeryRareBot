@@ -67,3 +67,33 @@ class JellyfinClient:
             Fields="PrimaryImageAspectRatio,ProductionYear",
         )
         return data.get("Items", [])
+
+    async def search_audio(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        if not self.user_id:
+            raise JellyfinError("JELLYFIN_USER_ID is required to search media.")
+        data = await self.request(
+            "/Items",
+            UserId=self.user_id,
+            SearchTerm=query,
+            IncludeItemTypes="Audio",
+            Recursive="true",
+            Limit=str(limit),
+            Fields="Artists,RunTimeTicks",
+        )
+        return data.get("Items", [])
+
+    async def recently_added(self, limit: int = 5, include_item_types: str = "Movie,Series,Episode,Audio") -> list[dict[str, Any]]:
+        if not self.user_id:
+            raise JellyfinError("JELLYFIN_USER_ID is required to list recently added media.")
+        data = await self.request(
+            f"/Users/{self.user_id}/Items/Latest",
+            IncludeItemTypes=include_item_types,
+            Limit=str(limit),
+        )
+        return data if isinstance(data, list) else data.get("Items", [])
+
+    def stream_url(self, item_id: str) -> str:
+        return f"{self.base_url}/Audio/{item_id}/stream?static=true&api_key={self.token}"
+
+    def web_item_url(self, item_id: str) -> str:
+        return f"{self.base_url}/web/index.html#!/details?id={item_id}"

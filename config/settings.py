@@ -59,6 +59,31 @@ STAFF_ROLE_ID = env_int("STAFF_ROLE_ID")
 VRS_MEMBER_ROLE_ID = env_int("VRS_MEMBER_ROLE_ID")
 
 
+def env_float(name: str, default: float) -> float:
+    """Read a float setting without failing on a blank environment value."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+
+
+MUSIC_MAX_QUEUE_SIZE = env_int("MUSIC_MAX_QUEUE_SIZE", 200)
+MUSIC_DEFAULT_VOLUME = env_float("MUSIC_DEFAULT_VOLUME", 0.5)
+MUSIC_IDLE_DISCONNECT_SECONDS = env_int("MUSIC_IDLE_DISCONNECT_SECONDS", 300)
+MUSIC_SEARCH_RESULTS = env_int("MUSIC_SEARCH_RESULTS", 5)
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg").strip() or "ffmpeg"
+
+DATABASE_PATH = os.getenv("DATABASE_PATH", "").strip() or str(BASE_DIR / "data" / "verrarebot.sqlite3")
+
+JELLYFIN_NOTIFY_CHANNEL_ID = env_int("JELLYFIN_NOTIFY_CHANNEL_ID")
+JELLYFIN_POLL_SECONDS = env_int("JELLYFIN_POLL_SECONDS", 300)
+VRMS_NOTIFY_CHANNEL_ID = env_int("VRMS_NOTIFY_CHANNEL_ID")
+VRMS_POLL_SECONDS = env_int("VRMS_POLL_SECONDS", 60)
+
+
 def validate() -> list[str]:
     """Return configuration problems that should prevent the bot from starting."""
     return [] if DISCORD_TOKEN else ["DISCORD_TOKEN is required"]

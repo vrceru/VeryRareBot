@@ -21,6 +21,7 @@ SERVER = discord.Color.dark_blue()
 VRMS = discord.Color.dark_teal()
 JELLYFIN = discord.Color.purple()
 ADMIN = discord.Color.dark_red()
+MUSIC = discord.Color.magenta()
 
 # ============================================================
 # BASE EMBED
@@ -123,4 +124,12 @@ def admin_embed(title, description=None):
         title,
         description,
         ADMIN
+    )
+
+
+def music_embed(title, description=None):
+    return make_embed(
+        title,
+        description,
+        MUSIC
     )
