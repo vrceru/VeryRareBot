@@ -151,6 +151,19 @@ async def on_app_command_error(
     else:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    log_channel = bot.get_channel(settings.LOG_CHANNEL_ID) if settings.LOG_CHANNEL_ID else None
+    if log_channel is not None:
+        command_name = interaction.command.qualified_name if interaction.command else "unknown"
+        try:
+            await log_channel.send(
+                embed=error_embed(
+                    "Unhandled Command Error",
+                    f"`/{command_name}` raised `{type(error).__name__}: {error}`"
+                )
+            )
+        except discord.HTTPException:
+            logger.warning("Failed to deliver an error report to the configured log channel.")
+
 @bot.event
 async def on_ready():
 
