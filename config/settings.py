@@ -87,6 +87,9 @@ TICKET_CATEGORY_ID = env_int("TICKET_CATEGORY_ID")
 TICKET_STAFF_ROLE_ID = env_int("TICKET_STAFF_ROLE_ID") or STAFF_ROLE_ID
 TICKET_MAX_OPEN_PER_USER = env_int("TICKET_MAX_OPEN_PER_USER", 3)
 
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
+MEDIA_REQUEST_CHANNEL_ID = env_int("MEDIA_REQUEST_CHANNEL_ID")
+
 
 def validate() -> list[str]:
     """Return configuration problems that should prevent the bot from starting."""

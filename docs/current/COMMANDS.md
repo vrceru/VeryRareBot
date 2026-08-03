@@ -45,6 +45,13 @@ Tickets:
 - `/ticket open <category>` — open a support ticket. Choosing a category opens a form; submitting it creates a private ticket channel. Categories: VeryRare Media Sign-Up, Bug Report, Forgot Password, Moderation Appeal, Other.
 - `/ticket close` — close the current ticket (usable by the ticket's opener or staff). Also available as a button in the ticket channel.
 
+Media requests:
+
+- `/media request <title> [notes]` — request a movie or TV show. Start typing and pick a suggestion (needs `TMDB_API_KEY`); posts a review card with a poster, overview, and Approve/Deny/Hold buttons to `MEDIA_REQUEST_CHANNEL_ID` (or the current channel if unset).
+- `/media queue [status]` — browse the request queue one card at a time. Defaults to active requests (pending, on hold, approved, downloading); pass a specific status to see history too.
+- `/media myrequests` — a compact list of your own requests and their status.
+- `/media cancel <request_id>` — cancel your own request (or, for staff, anyone's), unless it's already completed/denied/cancelled.
+
 ## Admin
 
 - `/announce <message>` — send an embed to `ANNOUNCEMENT_CHANNEL_ID`
@@ -69,6 +76,10 @@ Moderation commands that target a member (`warn`, `mute`, `kick`, `ban`) refuse 
 - `/vrms start` / `/vrms stop` / `/vrms restart` — operate `VRMS_SERVICE_NAME`
 
 VRMS commands are unavailable until `VRMS_SERVICE_NAME` is configured. All role-restricted commands reject users when the corresponding role ID is unset — an unset role ID never grants access to anyone.
+
+## Media request review (button-based, not a command)
+
+The Approve / Deny / Hold / Mark Downloading / Mark Completed buttons on a request card are usable by Owner, DevOps, Admin, or Staff role holders — the same tier as `/whoami`'s Staff detection, broader than moderation's Admin-only gate, since content curation is typically a general staff duty. Anyone else clicking a button gets an ephemeral "not allowed" response; the button itself doesn't change.
 
 ## Background behavior (no command)
 

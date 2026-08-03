@@ -23,6 +23,7 @@ services/               Everything that isn't Discord-specific: I/O, business lo
   system.py                Host stats via psutil (for /serverinfo).
   vrms.py                  Narrow systemd wrapper, restricted to one allow-listed unit name.
   tickets.py               Ticket category registry (see "Extending" below).
+  tmdb.py                    Read-only TMDB client (search + details) for media request cards.
   music/
     base.py                Track dataclass, MusicProviderError, MusicProvider protocol.
     queue.py                GuildQueue: loop/shuffle/volume/queue state. No Discord imports —
@@ -36,7 +37,7 @@ services/               Everything that isn't Discord-specific: I/O, business lo
 cogs/                    Discord-facing layer: slash commands and event listeners. Each file is
                          auto-loaded by bot.py if it defines an async setup(bot) function.
   admin.py, server.py, utility.py, jellyfin.py, vrms.py, music.py, logging.py,
-  notifications.py, tickets.py
+  notifications.py, tickets.py, media.py
 
 views/media_buttons.py   A discord.ui.View (external link button) used by /jellyfin search.
 
@@ -57,6 +58,8 @@ tests/                   unittest, run with `python -m unittest discover -s test
 
 **Persistent views survive restarts.** Ticket buttons/select (`TicketPanelView`, `TicketControlView` in `cogs/tickets.py`) use static `custom_id`s and `timeout=None`, and are registered once via `bot.add_view()` in the cog's `__init__`. On restart, Discord routes button clicks on old messages back to these same handlers — the handlers look up ticket state by `interaction.channel_id` rather than baking a ticket ID into the view, so there's nothing to re-register per ticket.
 
+**Dynamic per-entity persistent views for media requests.** Ticket buttons are stateless (they look up ticket state by `interaction.channel_id`, since a channel holds exactly one ticket). Media request cards don't have that luxury — many cards can sit in the same review channel — so their Approve/Deny/Hold/etc. buttons use `discord.ui.DynamicItem` (`MediaActionButton` in `cogs/media.py`): the request ID is encoded directly in the button's `custom_id` (`media:<action>:<request_id>`), matched by a regex `template` the class registers once via `bot.add_dynamic_items()`. Discord routes a click on *any* matching `custom_id` — including on messages sent long before the current process started — back to `from_custom_id()`, which reconstructs the button and calls its `callback()`. No per-card view registration, no in-memory state to lose on restart.
+
 **Fail open to "feature disabled," not to a crash.** Jellyfin, VRMS, notifications, and tickets are all no-ops (or return a clear user-facing error) when their settings are unconfigured, rather than raising on import or at startup. `config/settings.py`'s `validate()` only hard-requires `DISCORD_TOKEN`.
 
 ## Request flow (example: `/music play`)
@@ -67,6 +70,21 @@ tests/                   unittest, run with `python -m unittest discover -s test
 4. `GuildQueue.enqueue()` / `enqueue_many()` adds them (`services/music/queue.py`).
 5. If nothing is currently playing, `GuildPlayer.play_next()` calls `provider.stream_url(track)` to lazily resolve a short-lived direct audio URL, then hands it to `discord.FFmpegPCMAudio`.
 6. When ffmpeg finishes, discord.py's `after=` callback (running on a worker thread) hands control back to the event loop via `asyncio.run_coroutine_threadsafe`, which re-enters `play_next()` for the next track.
+
+## Media requests and the VRMS integration seam
+
+`cogs/media.py` (`/media request`, `/media queue`, `/media myrequests`, `/media cancel`) is a request/approval/queue system for the Very Rare Media Service, built ahead of VRMS having any API to integrate with. It's entirely self-contained today:
+
+- `services/tmdb.py` supplies search, metadata, and poster art (title, year, overview, poster) — this is the only external API involved, and it's read-only.
+- `services/database.py`'s `media_requests` table is the source of truth for status: `pending → approved → downloading → completed`, with `denied`/`on_hold`/`cancelled` as side branches. See `TRANSITIONS` in `cogs/media.py` for the exact allowed state graph.
+- Every status change today happens because a staff member clicked a button on the request card (`apply_media_action()` in `cogs/media.py`). There is no code anywhere that talks to VRMS itself — the `downloading` and `completed` states are just labels staff set by hand once VRMS is actually fetching something.
+
+**Where a real VRMS API plugs in later:** once VRMS exposes something the bot can call, the natural integration points are:
+
+1. A `services/vrms.py` method (alongside the existing `service_action`/`status`/`is_active`) that asks VRMS to start a download for an approved request, called right after (or instead of) the "Mark Downloading" button handler in `apply_media_action()`.
+2. A polling loop in `cogs/notifications.py` (same pattern as the existing Jellyfin/VRMS polling) or a webhook receiver, that calls `bot.db.update_media_request_status()` automatically when VRMS reports a download finished — replacing the manual "Mark Completed" click, or leaving it as a manual confirmation step alongside an automatic status hint if you'd rather keep a human in the loop.
+
+Nothing on the Discord-facing side (the cards, the queue browser, `/media myrequests`) needs to change for that — they render whatever's in `media_requests`, however it got there.
 
 ## Extending
 

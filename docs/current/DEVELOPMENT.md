@@ -86,6 +86,18 @@ Add one entry to `TICKET_CATEGORIES` in `services/tickets.py`:
 
 That's it — `/ticket open`'s choices, `/ticket panel`'s dropdown, and the submission modal are all built from this dict at import time in `cogs/tickets.py`. Keep it to 5 fields or fewer (a Discord modal limit); `tests/test_tickets.py` asserts this for every category.
 
+## Extending the media request workflow
+
+The status graph lives entirely in `TRANSITIONS` in `cogs/media.py` — each entry maps an action name to `(new_status, {allowed source statuses})`. To add a step (say, a "shipped"/"archived" status after `completed`):
+
+1. Add the transition to `TRANSITIONS`.
+2. Add a label (and color, if you want the card tinted differently) to `STATUS_LABELS` / `STATUS_COLORS`.
+3. Add the button for it in `build_status_view()`, under whichever status should show it.
+
+`tests/test_media.py`'s `test_every_transition_target_has_a_label` will fail if you add a transition without a label, which is the usual way this gets caught.
+
+If/when VRMS gets an API, the place to call it is `apply_media_action()` in `cogs/media.py` — that's the single function every status-changing button already routes through. See "Media requests and the VRMS integration seam" in [ARCHITECTURE.md](ARCHITECTURE.md) for the fuller picture.
+
 ## Conventions
 
 - No hardcoded tokens, IDs, or URLs — add a setting in `config/settings.py` and document it in [CONFIGURATION.md](CONFIGURATION.md).

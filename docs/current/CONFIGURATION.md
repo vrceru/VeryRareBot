@@ -76,3 +76,12 @@ No API keys are needed for YouTube/SoundCloud (via `yt-dlp`); VeryRare-media pla
 | `TICKET_MAX_OPEN_PER_USER` | `3` | Simultaneous open-ticket cap per member, per server. |
 
 Ticket categories themselves (labels, form fields, colors) are defined in code at [services/tickets.py](../../services/tickets.py), not via environment variables — see [DEVELOPMENT.md](DEVELOPMENT.md) for how to add one.
+
+## Media requests
+
+| Variable | Default | Notes |
+|---|---|---|
+| `TMDB_API_KEY` | unset | Free key from [themoviedb.org](https://www.themoviedb.org/settings/api). Required for `/media request` and its title autocomplete; without it, `/media request` returns a clear "not configured" error rather than failing oddly. |
+| `MEDIA_REQUEST_CHANNEL_ID` | unset | Where request cards get posted for staff review. Falls back to whatever channel `/media request` was run in if unset. |
+
+There's no VRMS API to configure yet — `/media queue`'s downloading/completed states are set by staff clicking buttons on the request card, not synced automatically. See [ARCHITECTURE.md](ARCHITECTURE.md) for how that's expected to connect once VRMS has one.
