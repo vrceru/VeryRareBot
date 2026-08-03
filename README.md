@@ -11,12 +11,12 @@ VeryRareBot is the Discord assistant for the Very Rare Society. It provides serv
 - TempVoice: `/voice setup` configures a join-to-create trigger channel; joining it spawns a personal temp voice channel (auto-deleted when empty) with `/voice lock|unlock|rename|limit|kick|claim` plus a matching button control panel, replacing the third-party TempVoice bot
 - Music: `/music play|search|pause|resume|stop|skip|previous|queue|remove|shuffle|loop|volume|nowplaying|join|leave|stay` plus `/music playlist save|import|load|list|delete` (private per-user), sourced from YouTube, SoundCloud, or the Society's own Jellyfin library ("VeryRare media"), with an interactive Now Playing card (Previous/Pause/Skip/Loop buttons)
 - Tickets: `/ticket open` (VeryRare Media sign-up, bug report, forgot password, moderation appeal, other) and `/ticket panel` for a self-serve picker; each ticket gets a private channel for staff to follow up in
-- Media requests: `/media request` (TMDB-backed search with poster art), `/media queue`, `/media myrequests`, `/media cancel`, with staff Approve/Deny/Hold/Downloading/Completed buttons on each request card — the Discord-side half of VeryRareMediaService integration, ready to wire into a real VRMS API once one exists (see [ARCHITECTURE.md](docs/current/ARCHITECTURE.md#media-requests-and-the-vrms-integration-seam))
+- Media requests: `/media request` (TMDB-backed search with poster art), `/media queue`, `/media myrequests`, `/media cancel`, with staff Approve/Deny/Hold/Downloading/Completed buttons on each request card — the Discord-side half of VeryRareMediaService integration; a real VRMS API now exists and is ready to wire in (see [VRMS_INTEGRATION.md](docs/current/VRMS_INTEGRATION.md))
 - Host health: `/serverinfo`
 - Jellyfin: `/jellyfin status`, `/jellyfin nowplaying`, `/jellyfin libraries`, `/jellyfin search`, plus background notifications for new library additions
 - VRMS: `/vrms status`, `/vrms start`, `/vrms stop`, `/vrms restart`, plus background outage/recovery notifications
 
-Docs: [Commands](docs/current/COMMANDS.md) · [Configuration](docs/current/CONFIGURATION.md) · [Installation](docs/current/INSTALLATION.md) · [Architecture](docs/current/ARCHITECTURE.md) · [Development guide](docs/current/DEVELOPMENT.md)
+Docs: [Commands](docs/current/COMMANDS.md) · [Configuration](docs/current/CONFIGURATION.md) · [Installation](docs/current/INSTALLATION.md) · [Architecture](docs/current/ARCHITECTURE.md) · [Development guide](docs/current/DEVELOPMENT.md) · [VRMS integration](docs/current/VRMS_INTEGRATION.md)
 
 ## Setup
 

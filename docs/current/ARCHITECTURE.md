@@ -91,12 +91,14 @@ tests/                   unittest, run with `python -m unittest discover -s test
 - `services/database.py`'s `media_requests` table is the source of truth for status: `pending → approved → downloading → completed`, with `denied`/`on_hold`/`cancelled` as side branches. See `TRANSITIONS` in `cogs/media.py` for the exact allowed state graph.
 - Every status change today happens because a staff member clicked a button on the request card (`apply_media_action()` in `cogs/media.py`). There is no code anywhere that talks to VRMS itself — the `downloading` and `completed` states are just labels staff set by hand once VRMS is actually fetching something.
 
-**Where a real VRMS API plugs in later:** once VRMS exposes something the bot can call, the natural integration points are:
+**A real VRMS API exists now** (it didn't when this section was first written) — see
+[VRMS_INTEGRATION.md](VRMS_INTEGRATION.md) for the concrete field mapping, endpoint reference,
+and a recommended implementation plan for wiring `apply_media_action()`, a new `services/vrms.py`
+(or `services/vrms_api.py`) HTTP client, and a `cogs/notifications.py`-style polling loop to
+surface VRMS's own two admin-approval gates in Discord.
 
-1. A `services/vrms.py` method (alongside the existing `service_action`/`status`/`is_active`) that asks VRMS to start a download for an approved request, called right after (or instead of) the "Mark Downloading" button handler in `apply_media_action()`.
-2. A polling loop in `cogs/notifications.py` (same pattern as the existing Jellyfin/VRMS polling) or a webhook receiver, that calls `bot.db.update_media_request_status()` automatically when VRMS reports a download finished — replacing the manual "Mark Completed" click, or leaving it as a manual confirmation step alongside an automatic status hint if you'd rather keep a human in the loop.
-
-Nothing on the Discord-facing side (the cards, the queue browser, `/media myrequests`) needs to change for that — they render whatever's in `media_requests`, however it got there.
+Nothing on the Discord-facing side (the cards, the queue browser, `/media myrequests`) needs to
+change beyond that — they render whatever's in `media_requests`, however it got there.
 
 ## Extending
 
