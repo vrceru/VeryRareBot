@@ -83,6 +83,10 @@ JELLYFIN_POLL_SECONDS = env_int("JELLYFIN_POLL_SECONDS", 300)
 VRMS_NOTIFY_CHANNEL_ID = env_int("VRMS_NOTIFY_CHANNEL_ID")
 VRMS_POLL_SECONDS = env_int("VRMS_POLL_SECONDS", 60)
 
+TICKET_CATEGORY_ID = env_int("TICKET_CATEGORY_ID")
+TICKET_STAFF_ROLE_ID = env_int("TICKET_STAFF_ROLE_ID") or STAFF_ROLE_ID
+TICKET_MAX_OPEN_PER_USER = env_int("TICKET_MAX_OPEN_PER_USER", 3)
+
 
 def validate() -> list[str]:
     """Return configuration problems that should prevent the bot from starting."""

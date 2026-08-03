@@ -26,6 +26,8 @@
 - `/music nowplaying`
 - `/music join`, `/music leave`
 - `/music playlist save <name>` / `load <name>` / `list` / `delete <name>` — personal saved playlists
+- `/ticket open <category>` — open a support ticket (VeryRare Media sign-up, bug report, forgot password, moderation appeal, or other); opens a form, then creates a private ticket channel
+- `/ticket close` — close the current ticket (opener or staff)
 
 ## Admin
 
@@ -40,6 +42,7 @@
 - `/slowmode <seconds>` — 0 disables it, max 21600 (6 hours)
 - `/lock`, `/unlock` — toggle `@everyone` send permission on the current channel
 - `/clear <amount>` — delete 1–100 recent messages
+- `/ticket panel [message]` — post a persistent category-picker panel for members to self-serve ticket creation
 
 All moderation commands that target a member (`warn`, `mute`, `kick`, `ban`) reject the action if the target is the server owner, the bot, yourself, or has a role at or above your own (or the bot's).
 
@@ -56,3 +59,4 @@ VRMS commands are deliberately unavailable until a service name is configured. A
 - **Logging** — member join/leave, role changes, message edits/deletes, voice channel activity, and command usage are logged to `LOG_CHANNEL_ID` (and the log file) when configured. Member joins also post a welcome message to `WELCOME_CHANNEL_ID`.
 - **Notifications** — polls Jellyfin for new library additions (posted to `JELLYFIN_NOTIFY_CHANNEL_ID`) and VRMS service state changes (posted to `VRMS_NOTIFY_CHANNEL_ID`). Both are disabled unless their channel ID is set.
 - Music auto-disconnects after `MUSIC_IDLE_DISCONNECT_SECONDS` of inactivity, or immediately if everyone leaves its voice channel.
+- **Tickets** — each ticket gets its own private channel (visible to the opener, `TICKET_STAFF_ROLE_ID`, and the bot) under `TICKET_CATEGORY_ID`. Sign-up and forgot-password tickets are informational only: staff still create the Jellyfin account or reset the password by hand — the bot does not touch Jellyfin credentials for this. Closing renames the channel to `closed-...` and revokes the opener's send access; deleting the channel is a separate, staff-only step. Users are capped at `TICKET_MAX_OPEN_PER_USER` simultaneous open tickets.

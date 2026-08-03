@@ -37,6 +37,20 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
     source TEXT NOT NULL,
     artist TEXT
 );
+
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL UNIQUE,
+    opener_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    closed_by_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_tickets_guild_opener ON tickets (guild_id, opener_id, status);
 """
 
 
@@ -158,6 +172,43 @@ class Database:
         cursor = await self.conn.execute(
             "DELETE FROM playlists WHERE guild_id = ? AND owner_id = ? AND name = ?",
             (guild_id, owner_id, name),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Tickets
+    # ------------------------------------------------------------------
+
+    async def create_ticket(self, guild_id: int, channel_id: int, opener_id: int, category: str) -> int:
+        cursor = await self.conn.execute(
+            "INSERT INTO tickets (guild_id, channel_id, opener_id, category, status, created_at) "
+            "VALUES (?, ?, ?, ?, 'open', ?)",
+            (guild_id, channel_id, opener_id, category, _now()),
+        )
+        await self.conn.commit()
+        return cursor.lastrowid
+
+    async def count_open_tickets(self, guild_id: int, opener_id: int) -> int:
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) AS n FROM tickets WHERE guild_id = ? AND opener_id = ? AND status = 'open'",
+            (guild_id, opener_id),
+        )
+        row = await cursor.fetchone()
+        return row["n"] if row else 0
+
+    async def get_ticket_by_channel(self, channel_id: int) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM tickets WHERE channel_id = ?",
+            (channel_id,),
+        )
+        return await cursor.fetchone()
+
+    async def close_ticket(self, channel_id: int, closed_by_id: int) -> bool:
+        cursor = await self.conn.execute(
+            "UPDATE tickets SET status = 'closed', closed_at = ?, closed_by_id = ? "
+            "WHERE channel_id = ? AND status = 'open'",
+            (_now(), closed_by_id, channel_id),
         )
         await self.conn.commit()
         return cursor.rowcount > 0
