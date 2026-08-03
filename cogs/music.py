@@ -36,6 +36,7 @@ class Music(commands.Cog):
     """Multi-source music playback: YouTube, SoundCloud, and VeryRare media."""
 
     music = app_commands.Group(name="music", description="Music playback commands.")
+    playlist = app_commands.Group(name="playlist", parent=music, description="Save and load personal playlists.")
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -268,6 +269,51 @@ class Music(commands.Cog):
         if track.thumbnail:
             embed.set_thumbnail(url=track.thumbnail)
         await interaction.response.send_message(embed=embed)
+
+    @playlist.command(name="save", description="Save the current queue as a personal playlist.")
+    @app_commands.describe(name="A name to save this playlist under.")
+    async def playlist_save(self, interaction: discord.Interaction, name: str):
+        player = self._require_player(interaction)
+        tracks = ([player.queue.current] if player and player.queue.current else []) + (player.queue.upcoming if player else [])
+        if not tracks:
+            await interaction.response.send_message(embed=error_embed("Nothing to Save", "There's no queue to save right now."), ephemeral=True)
+            return
+        await self.bot.db.save_playlist(interaction.guild_id, interaction.user.id, name, tracks)
+        await interaction.response.send_message(embed=success_embed("Playlist Saved", f"Saved **{len(tracks)}** tracks as **{name}**."), ephemeral=True)
+
+    @playlist.command(name="load", description="Queue a saved playlist.")
+    @app_commands.describe(name="The playlist to load.")
+    async def playlist_load(self, interaction: discord.Interaction, name: str):
+        if not await self._ensure_voice(interaction):
+            return
+        tracks = await self.bot.db.load_playlist(interaction.guild_id, interaction.user.id, name, interaction.user.id)
+        if tracks is None:
+            await interaction.response.send_message(embed=error_embed("Playlist Not Found", f"No playlist named **{name}**."), ephemeral=True)
+            return
+
+        player = self._require_player(interaction)
+        added = player.queue.enqueue_many(tracks)
+        if not player.is_playing:
+            await player.play_next()
+        await interaction.response.send_message(embed=success_embed("Playlist Queued", f"Queued **{added}** tracks from **{name}**."), ephemeral=True)
+
+    @playlist.command(name="list", description="List your saved playlists.")
+    async def playlist_list(self, interaction: discord.Interaction):
+        names = await self.bot.db.list_playlists(interaction.guild_id, interaction.user.id)
+        if not names:
+            await interaction.response.send_message(embed=error_embed("No Playlists", "You haven't saved any playlists yet."), ephemeral=True)
+            return
+        embed = music_embed("Your Playlists", "\n".join(f"• {name}" for name in names))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @playlist.command(name="delete", description="Delete a saved playlist.")
+    @app_commands.describe(name="The playlist to delete.")
+    async def playlist_delete(self, interaction: discord.Interaction, name: str):
+        deleted = await self.bot.db.delete_playlist(interaction.guild_id, interaction.user.id, name)
+        if not deleted:
+            await interaction.response.send_message(embed=error_embed("Playlist Not Found", f"No playlist named **{name}**."), ephemeral=True)
+            return
+        await interaction.response.send_message(embed=success_embed("Playlist Deleted", f"Deleted **{name}**."), ephemeral=True)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
