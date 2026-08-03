@@ -219,6 +219,21 @@ class Music(commands.Cog):
         await player.disconnect()
         await interaction.response.send_message(embed=success_embed("Disconnected", "Left the voice channel."), ephemeral=True)
 
+    @music.command(name="stay", description="Toggle whether I stay connected instead of auto-disconnecting when idle or alone.")
+    async def stay(self, interaction: discord.Interaction):
+        player = self._require_player(interaction)
+        if not player or not player.is_connected:
+            await interaction.response.send_message(
+                embed=error_embed("Not Connected", "I'm not in a voice channel — use `/music join` first."), ephemeral=True
+            )
+            return
+        player.set_stay(not player.stay)
+        if player.stay:
+            message = "I'll stay connected until you use `/music leave`, even if idle or the channel empties."
+        else:
+            message = "I'll auto-disconnect again after being idle or when everyone leaves."
+        await interaction.response.send_message(embed=success_embed("Stay Mode Updated", message), ephemeral=True)
+
     @music.command(name="play", description="Play or queue a track by search term or URL.")
     @app_commands.describe(query="Search terms or a YouTube/SoundCloud URL.", source="Where to look. Defaults to auto-detecting from the query.")
     @app_commands.choices(source=SOURCE_CHOICES)
@@ -407,6 +422,29 @@ class Music(commands.Cog):
         await self.bot.db.save_playlist(interaction.guild_id, interaction.user.id, name, tracks)
         await interaction.response.send_message(embed=success_embed("Playlist Saved", f"Saved **{len(tracks)}** tracks as **{name}**."), ephemeral=True)
 
+    @playlist.command(name="import", description="Import a YouTube or SoundCloud playlist URL as a saved playlist.")
+    @app_commands.describe(url="A YouTube or SoundCloud playlist URL.", name="Name to save it under.")
+    async def playlist_import(self, interaction: discord.Interaction, url: str, name: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        provider = resolve_provider(url)
+        if not provider.handles(url):
+            await interaction.followup.send(
+                embed=error_embed("Not a Playlist URL", "Provide a YouTube or SoundCloud playlist (or video) URL.")
+            )
+            return
+
+        try:
+            tracks = await provider.resolve_playlist(url, interaction.user.id)
+        except MusicProviderError as exc:
+            await interaction.followup.send(embed=error_embed("Import Failed", str(exc)))
+            return
+
+        await self.bot.db.save_playlist(interaction.guild_id, interaction.user.id, name, tracks)
+        await interaction.followup.send(
+            embed=success_embed("Playlist Imported", f"Saved **{len(tracks)}** tracks from {provider.name} as **{name}**.\nThis playlist is only visible to you.")
+        )
+
     @playlist.command(name="load", description="Queue a saved playlist.")
     @app_commands.describe(name="The playlist to load.")
     async def playlist_load(self, interaction: discord.Interaction, name: str):
@@ -429,7 +467,7 @@ class Music(commands.Cog):
         if not names:
             await interaction.response.send_message(embed=error_embed("No Playlists", "You haven't saved any playlists yet."), ephemeral=True)
             return
-        embed = music_embed("Your Playlists", "\n".join(f"• {name}" for name in names))
+        embed = music_embed("Your Playlists", "Only visible to you.\n\n" + "\n".join(f"• {name}" for name in names))
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @playlist.command(name="delete", description="Delete a saved playlist.")
@@ -450,6 +488,8 @@ class Music(commands.Cog):
             return
         channel = player.voice_client.channel
         if before.channel != channel and after.channel != channel:
+            return
+        if player.stay:
             return
         remaining_humans = [m for m in channel.members if not m.bot]
         if not remaining_humans:

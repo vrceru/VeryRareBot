@@ -63,6 +63,24 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.db.list_playlists(guild_id=1, owner_id=2), ["party"])
         self.assertFalse(await self.db.delete_playlist(guild_id=1, owner_id=2, name="chill"))
 
+    async def test_playlists_are_private_to_their_owner(self):
+        # Two different users, same guild, same playlist name -- must not collide or leak.
+        await self.db.save_playlist(guild_id=1, owner_id=2, name="chill", tracks=[make_track("owner2-track")])
+        await self.db.save_playlist(guild_id=1, owner_id=3, name="chill", tracks=[make_track("owner3-track")])
+
+        self.assertEqual(await self.db.list_playlists(guild_id=1, owner_id=2), ["chill"])
+        self.assertEqual(await self.db.list_playlists(guild_id=1, owner_id=3), ["chill"])
+
+        owner2_tracks = await self.db.load_playlist(guild_id=1, owner_id=2, name="chill", requester_id=2)
+        owner3_tracks = await self.db.load_playlist(guild_id=1, owner_id=3, name="chill", requester_id=3)
+        self.assertEqual([t.title for t in owner2_tracks], ["owner2-track"])
+        self.assertEqual([t.title for t in owner3_tracks], ["owner3-track"])
+
+        # Owner 3 can't delete or otherwise affect owner 2's playlist of the same name.
+        self.assertFalse(await self.db.delete_playlist(guild_id=1, owner_id=3, name="nonexistent-for-owner3"))
+        await self.db.delete_playlist(guild_id=1, owner_id=3, name="chill")
+        self.assertEqual(await self.db.list_playlists(guild_id=1, owner_id=2), ["chill"])
+
 
 if __name__ == "__main__":
     unittest.main()

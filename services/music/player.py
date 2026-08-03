@@ -38,6 +38,7 @@ class GuildPlayer:
         self.queue = GuildQueue(settings.MUSIC_MAX_QUEUE_SIZE, settings.MUSIC_DEFAULT_VOLUME)
         self.voice_client: discord.VoiceClient | None = None
         self.text_channel: discord.abc.Messageable | None = None
+        self.stay = False
 
         self._lock = asyncio.Lock()
         self._idle_task: asyncio.Task | None = None
@@ -69,6 +70,14 @@ class GuildPlayer:
         self.queue.clear()
         self.queue.current = None
         self.now_playing_message = None
+        self.stay = False
+
+    def set_stay(self, value: bool) -> None:
+        self.stay = value
+        if value:
+            self._cancel_idle_timer()
+        elif self.is_connected and not self.is_playing:
+            self._start_idle_timer()
 
     def pause(self) -> None:
         if self.voice_client and self.voice_client.is_playing():
@@ -189,7 +198,7 @@ class GuildPlayer:
 
     def _start_idle_timer(self) -> None:
         self._cancel_idle_timer()
-        if settings.MUSIC_IDLE_DISCONNECT_SECONDS <= 0:
+        if self.stay or settings.MUSIC_IDLE_DISCONNECT_SECONDS <= 0:
             return
         self._idle_task = asyncio.create_task(self._idle_disconnect())
 

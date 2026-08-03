@@ -37,11 +37,15 @@ Music (open to any member — no separate DJ role):
 - `/music nowplaying` — posts (or re-posts) the interactive Now Playing card
 
 Whenever something starts playing, the bot posts a **Now Playing card** with Previous/Pause-Resume/Skip/Loop buttons, and edits that same message in place as the track changes, gets paused, or loops — so most playback control doesn't need typed commands at all. It's tied to a single live player per server, not preserved across a bot restart (a restart naturally interrupts voice anyway).
-- `/music leave`
+- `/music leave` — disconnect and clear the queue
+- `/music stay` — toggle whether the bot stays connected instead of auto-disconnecting when idle or when everyone leaves the channel. Only an explicit `/music leave` disconnects it while this is on.
 - `/music playlist save <name>` — save the current queue
+- `/music playlist import <url> <name>` — save a YouTube or SoundCloud playlist URL as a playlist, without queueing/playing it now
 - `/music playlist load <name>` — queue a saved playlist. Also requires `/music join` first.
 - `/music playlist list` — list your saved playlists
 - `/music playlist delete <name>`
+
+Saved playlists (`save`/`import`/`list`/`load`/`delete`) are private to whoever created them — every playlist is scoped to its owner's Discord user ID in the database, so other members (including staff) can't see or load someone else's playlist by name, even if they guess it.
 
 Tickets:
 
@@ -88,7 +92,7 @@ The Approve / Deny / Hold / Mark Downloading / Mark Completed buttons on a reque
 
 - **Logging** — member joins/leaves, role changes, message edits/deletes, voice channel activity, and slash command usage are logged to `LOG_CHANNEL_ID` (and the log file) when configured. Member joins also post a welcome message to `WELCOME_CHANNEL_ID`. Unhandled command errors are also forwarded to `LOG_CHANNEL_ID`.
 - **Notifications** — polls Jellyfin for new library additions (`JELLYFIN_NOTIFY_CHANNEL_ID`) and VRMS service state changes (`VRMS_NOTIFY_CHANNEL_ID`). Each is disabled unless its channel ID is set. The first poll after startup only records a baseline — it doesn't replay pre-existing history.
-- **Music auto-disconnect** — leaves the voice channel after `MUSIC_IDLE_DISCONNECT_SECONDS` of inactivity, or immediately once every human leaves.
+- **Music auto-disconnect** — leaves the voice channel after `MUSIC_IDLE_DISCONNECT_SECONDS` of inactivity, or immediately once every human leaves. Disabled while `/music stay` is on.
 - **Tickets** — each ticket gets a private channel under `TICKET_CATEGORY_ID`, visible to the opener, `TICKET_STAFF_ROLE_ID`, and the bot. Sign-up and forgot-password tickets are informational only: staff create the Jellyfin account or reset the password by hand. Closing a ticket revokes the opener's send access and renames the channel to `closed-...`; deleting the channel afterward is a separate, staff-only button. Users are capped at `TICKET_MAX_OPEN_PER_USER` simultaneous open tickets.
 
 See also: [CONFIGURATION.md](CONFIGURATION.md) for every setting referenced above, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
