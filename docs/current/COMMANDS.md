@@ -59,6 +59,16 @@ Media requests:
 - `/media myrequests` — a compact list of your own requests and their status.
 - `/media cancel <request_id>` — cancel your own request (or, for staff, anyone's), unless it's already completed/denied/cancelled.
 
+TempVoice (join-to-create voice channels, replaces the third-party TempVoice bot):
+
+- `/voice lock` / `/voice unlock` — control whether new members can join your temp channel
+- `/voice rename <name>` — rename your temp channel
+- `/voice limit <0-99>` — set a user limit (0 = unlimited)
+- `/voice kick <member>` — remove someone from your temp channel
+- `/voice claim` — take ownership of a temp channel whose owner has left (only works if the owner isn't still in it)
+
+All of the above are also buttons (Lock/Unlock/Rename/Limit/Claim) on a control panel posted automatically in each new temp channel's own chat. The channel owner also gets Manage Channel + Move Members on their channel directly, so Discord's native channel settings work too. Joining the configured trigger voice channel creates a new temp channel under the configured category and moves you into it; it's deleted automatically once everyone leaves. Set up with `/voice setup` (Admin, below).
+
 ## Admin
 
 - `/announce <message>` — send an embed to `ANNOUNCEMENT_CHANNEL_ID`
@@ -73,6 +83,8 @@ Media requests:
 - `/lock` / `/unlock` — toggle `@everyone`'s send permission on the current channel
 - `/clear <amount>` — delete 1–100 recent messages
 - `/ticket panel [message]` — post a persistent category-picker panel so members can self-serve ticket creation
+- `/voice setup <trigger_channel> [category]` — configure TempVoice's join-to-create trigger channel and where temp channels get created. Stored in the database, not `.env` — no restart needed, and re-running it just updates the config.
+- `/voice disable` — stop creating new temp channels (existing ones are unaffected)
 
 Moderation commands that target a member (`warn`, `mute`, `kick`, `ban`) refuse to act if the target is the server owner, the bot, yourself, or has a role at or above your own (or the bot's own) highest role.
 

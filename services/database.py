@@ -73,6 +73,19 @@ CREATE TABLE IF NOT EXISTS media_requests (
 
 CREATE INDEX IF NOT EXISTS idx_media_requests_guild_status ON media_requests (guild_id, status);
 CREATE INDEX IF NOT EXISTS idx_media_requests_guild_requester ON media_requests (guild_id, requester_id);
+
+CREATE TABLE IF NOT EXISTS tempvoice_config (
+    guild_id INTEGER PRIMARY KEY,
+    trigger_channel_id INTEGER NOT NULL,
+    category_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS tempvoice_channels (
+    channel_id INTEGER PRIMARY KEY,
+    guild_id INTEGER NOT NULL,
+    owner_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 ACTIVE_MEDIA_STATUSES = ("pending", "on_hold", "approved", "downloading")
@@ -306,3 +319,59 @@ class Database:
             (guild_id, requester_id, limit),
         )
         return list(await cursor.fetchall())
+
+    # ------------------------------------------------------------------
+    # TempVoice (join-to-create temporary voice channels)
+    # ------------------------------------------------------------------
+
+    async def set_tempvoice_config(self, guild_id: int, trigger_channel_id: int, category_id: int | None) -> None:
+        await self.conn.execute(
+            "INSERT INTO tempvoice_config (guild_id, trigger_channel_id, category_id) VALUES (?, ?, ?) "
+            "ON CONFLICT (guild_id) DO UPDATE SET trigger_channel_id = excluded.trigger_channel_id, "
+            "category_id = excluded.category_id",
+            (guild_id, trigger_channel_id, category_id),
+        )
+        await self.conn.commit()
+
+    async def get_tempvoice_config(self, guild_id: int) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM tempvoice_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return await cursor.fetchone()
+
+    async def clear_tempvoice_config(self, guild_id: int) -> bool:
+        cursor = await self.conn.execute(
+            "DELETE FROM tempvoice_config WHERE guild_id = ?",
+            (guild_id,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def create_tempvoice_channel(self, channel_id: int, guild_id: int, owner_id: int) -> None:
+        await self.conn.execute(
+            "INSERT INTO tempvoice_channels (channel_id, guild_id, owner_id, created_at) VALUES (?, ?, ?, ?)",
+            (channel_id, guild_id, owner_id, _now()),
+        )
+        await self.conn.commit()
+
+    async def get_tempvoice_channel(self, channel_id: int) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM tempvoice_channels WHERE channel_id = ?",
+            (channel_id,),
+        )
+        return await cursor.fetchone()
+
+    async def set_tempvoice_owner(self, channel_id: int, owner_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE tempvoice_channels SET owner_id = ? WHERE channel_id = ?",
+            (owner_id, channel_id),
+        )
+        await self.conn.commit()
+
+    async def delete_tempvoice_channel(self, channel_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM tempvoice_channels WHERE channel_id = ?",
+            (channel_id,),
+        )
+        await self.conn.commit()

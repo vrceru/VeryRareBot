@@ -27,6 +27,7 @@ INVITE_PERMISSIONS = discord.Permissions(
     moderate_members=True,
     connect=True,
     speak=True,
+    move_members=True,
     use_voice_activation=True,
 )
 

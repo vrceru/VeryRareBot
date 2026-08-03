@@ -41,7 +41,7 @@ assets/welcome_card.png  The "VRS" template graphic (transparent PNG); avatars a
 cogs/                    Discord-facing layer: slash commands and event listeners. Each file is
                          auto-loaded by bot.py if it defines an async setup(bot) function.
   admin.py, server.py, utility.py, jellyfin.py, vrms.py, music.py, logging.py,
-  notifications.py, tickets.py, media.py, welcome.py
+  notifications.py, tickets.py, media.py, welcome.py, tempvoice.py
 
 views/media_buttons.py   A discord.ui.View (external link button) used by /jellyfin search.
 
@@ -63,6 +63,10 @@ tests/                   unittest, run with `python -m unittest discover -s test
 **Persistent views survive restarts.** Ticket buttons/select (`TicketPanelView`, `TicketControlView` in `cogs/tickets.py`) use static `custom_id`s and `timeout=None`, and are registered once via `bot.add_view()` in the cog's `__init__`. On restart, Discord routes button clicks on old messages back to these same handlers — the handlers look up ticket state by `interaction.channel_id` rather than baking a ticket ID into the view, so there's nothing to re-register per ticket.
 
 **Dynamic per-entity persistent views for media requests.** Ticket buttons are stateless (they look up ticket state by `interaction.channel_id`, since a channel holds exactly one ticket). Media request cards don't have that luxury — many cards can sit in the same review channel — so their Approve/Deny/Hold/etc. buttons use `discord.ui.DynamicItem` (`MediaActionButton` in `cogs/media.py`): the request ID is encoded directly in the button's `custom_id` (`media:<action>:<request_id>`), matched by a regex `template` the class registers once via `bot.add_dynamic_items()`. Discord routes a click on *any* matching `custom_id` — including on messages sent long before the current process started — back to `from_custom_id()`, which reconstructs the button and calls its `callback()`. No per-card view registration, no in-memory state to lose on restart.
+
+**Database-backed per-guild config, not `.env`, for settings that change often.** Every other channel/role setting in this bot lives in `config/settings.py` (one value, all guilds, requires an edit + restart to change). TempVoice's trigger channel and category are the one exception: they're configured live via `/voice setup`, stored in the `tempvoice_config` table (one row per guild). Reach for this pattern instead of a new `.env` var when a setting is something an admin would plausibly want to change without shell access, or when the bot might realistically run in more than one guild with different values.
+
+**TempVoice control buttons are stateless like tickets, not per-entity like media requests.** `TempVoiceControlView` doesn't look anything up by ID at all — every button just checks "what voice channel is the person who clicked this currently in," via `services.database`'s `tempvoice_channels` table. One `bot.add_view()` call in `TempVoice.__init__` covers every temp channel that will ever exist, forever, with no dynamic items needed.
 
 **Fail open to "feature disabled," not to a crash.** Jellyfin, VRMS, notifications, and tickets are all no-ops (or return a clear user-facing error) when their settings are unconfigured, rather than raising on import or at startup. `config/settings.py`'s `validate()` only hard-requires `DISCORD_TOKEN`.
 

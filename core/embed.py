@@ -22,6 +22,7 @@ VRMS = discord.Color.dark_teal()
 JELLYFIN = discord.Color.purple()
 ADMIN = discord.Color.dark_red()
 MUSIC = discord.Color.magenta()
+TEMPVOICE = discord.Color.teal()
 
 # ============================================================
 # BASE EMBED
@@ -132,4 +133,12 @@ def music_embed(title, description=None):
         title,
         description,
         MUSIC
+    )
+
+
+def tempvoice_embed(title, description=None):
+    return make_embed(
+        title,
+        description,
+        TEMPVOICE
     )
