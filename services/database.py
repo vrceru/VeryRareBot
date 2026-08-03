@@ -98,6 +98,7 @@ _MIGRATIONS = (
     ("media_requests", "vrms_gate_message_id", "INTEGER"),
     ("media_requests", "vrms_progress", "REAL"),
     ("media_requests", "vrms_stage", "TEXT"),
+    ("media_requests", "is_anime", "INTEGER"),
 )
 
 ACTIVE_MEDIA_STATUSES = ("pending", "on_hold", "approved", "downloading")
@@ -285,13 +286,14 @@ class Database:
         poster_url: str | None,
         overview: str | None,
         notes: str | None,
+        is_anime: bool = False,
     ) -> int:
         now = _now()
         cursor = await self.conn.execute(
             "INSERT INTO media_requests "
             "(guild_id, requester_id, media_type, tmdb_id, title, year, poster_url, overview, notes, "
-            "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-            (guild_id, requester_id, media_type, tmdb_id, title, year, poster_url, overview, notes, now, now),
+            "is_anime, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (guild_id, requester_id, media_type, tmdb_id, title, year, poster_url, overview, notes, int(is_anime), now, now),
         )
         await self.conn.commit()
         return cursor.lastrowid

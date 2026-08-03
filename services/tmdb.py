@@ -9,6 +9,7 @@ from config import settings
 
 API_BASE = "https://api.themoviedb.org/3"
 IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
+ANIMATION_GENRE_ID = 16
 
 
 class TMDBError(RuntimeError):
@@ -23,6 +24,25 @@ class MediaResult:
     year: str | None
     overview: str | None
     poster_url: str | None
+    is_anime: bool = False
+
+
+def _genre_ids(item: dict[str, Any]) -> list[int]:
+    # /search/multi results carry "genre_ids" (bare ints); /tv/{id} details carry "genres"
+    # (full {id, name} objects) instead -- normalize both to a list of ids.
+    if "genre_ids" in item:
+        return item["genre_ids"] or []
+    return [g["id"] for g in item.get("genres") or []]
+
+
+def _is_anime(item: dict[str, Any], media_type: str) -> bool:
+    # TMDB has no dedicated "anime" category -- Japanese-origin animation is the standard proxy
+    # for it (used by most media tools). Movies aren't covered: anime films still just go in the
+    # regular movie library, matching VRMS's own media-type model.
+    if media_type != "tv":
+        return False
+    origin_countries = item.get("origin_country") or []
+    return ANIMATION_GENRE_ID in _genre_ids(item) and "JP" in origin_countries
 
 
 def _to_result(item: dict[str, Any], media_type: str) -> MediaResult:
@@ -36,6 +56,7 @@ def _to_result(item: dict[str, Any], media_type: str) -> MediaResult:
         year=date[:4] if date else None,
         overview=item.get("overview") or None,
         poster_url=f"{IMAGE_BASE}{poster_path}" if poster_path else None,
+        is_anime=_is_anime(item, media_type),
     )
 
 

@@ -16,7 +16,7 @@ from cogs.media import (
     build_status_view,
 )
 from services.database import Database
-from services.tmdb import TMDBClient, TMDBError, _to_result
+from services.tmdb import TMDBClient, TMDBError, _to_result, _is_anime
 
 
 class TMDBParsingTests(unittest.TestCase):
@@ -42,6 +42,38 @@ class TMDBParsingTests(unittest.TestCase):
         with patch("services.tmdb.settings.TMDB_API_KEY", ""):
             with self.assertRaises(TMDBError):
                 TMDBClient.from_settings()
+
+    def test_search_result_flags_japanese_animation_as_anime(self):
+        result = _to_result(
+            {"id": 127532, "name": "Solo Leveling", "genre_ids": [16, 10759, 10765], "origin_country": ["JP"]},
+            "tv",
+        )
+        self.assertTrue(result.is_anime)
+
+    def test_details_result_flags_japanese_animation_as_anime(self):
+        # /tv/{id} details shape: full genre objects, not bare ids.
+        result = _to_result(
+            {"id": 127532, "name": "Solo Leveling", "genres": [{"id": 16, "name": "Animation"}], "origin_country": ["JP"]},
+            "tv",
+        )
+        self.assertTrue(result.is_anime)
+
+    def test_western_animation_is_not_anime(self):
+        result = _to_result({"id": 1, "name": "Rick and Morty", "genre_ids": [16], "origin_country": ["US"]}, "tv")
+        self.assertFalse(result.is_anime)
+
+    def test_non_animated_japanese_show_is_not_anime(self):
+        result = _to_result({"id": 1, "name": "Terrace House", "genre_ids": [99], "origin_country": ["JP"]}, "tv")
+        self.assertFalse(result.is_anime)
+
+    def test_movies_are_never_flagged_anime_regardless_of_genre(self):
+        result = _to_result(
+            {"id": 1, "title": "Some Anime Movie", "genre_ids": [16], "origin_country": ["JP"]}, "movie"
+        )
+        self.assertFalse(result.is_anime)
+
+    def test_is_anime_handles_missing_fields(self):
+        self.assertFalse(_is_anime({"id": 1}, "tv"))
 
 
 class MediaActionButtonTemplateTests(unittest.TestCase):

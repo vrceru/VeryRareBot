@@ -102,7 +102,13 @@ def build_request_embed(request) -> discord.Embed:
     title = f"{request['title']} ({request['year']})" if request["year"] else request["title"]
     color = STATUS_COLORS.get(request["status"], discord.Color.blurple())
     embed = make_embed(title, request["overview"], color=color)
-    embed.add_field(name="Type", value="Movie" if request["media_type"] == "movie" else "TV Show", inline=True)
+    if request["media_type"] == "movie":
+        type_label = "Movie"
+    elif request["is_anime"]:
+        type_label = "Anime"
+    else:
+        type_label = "TV Show"
+    embed.add_field(name="Type", value=type_label, inline=True)
     embed.add_field(name="Status", value=STATUS_LABELS.get(request["status"], request["status"]), inline=True)
     embed.add_field(name="Requested By", value=f"<@{request['requester_id']}>", inline=True)
     if request["status"] == "downloading" and request["vrms_progress"] is not None:
@@ -197,13 +203,22 @@ async def _start_vrms_job_if_configured(bot, request) -> tuple[dict, str | None]
     except VRMSAPIError:
         return request, None
 
-    media_type = "show" if request["media_type"] == "tv" else request["media_type"]
+    if request["is_anime"]:
+        media_type = "anime"
+    elif request["media_type"] == "tv":
+        media_type = "show"
+    else:
+        media_type = request["media_type"]
     try:
         job = await client.enqueue(
             request["title"],
             media_type,
             year=int(request["year"]) if request["year"] else None,
-            metadata_id=str(request["tmdb_id"]),
+            # metadataId is a TMDB id -- only meaningful for the movie/tmdb-tv metadata
+            # providers. VRMS resolves anime through AniList instead, so passing it there
+            # would be a guaranteed-wrong direct lookup; let fetchMetadata fall back to an
+            # AniList title/year search.
+            metadata_id=None if media_type == "anime" else str(request["tmdb_id"]),
         )
     except VRMSAPIError as exc:
         logger.warning("VRMS enqueue failed for media request #%s: %s", request["id"], exc)
@@ -663,6 +678,7 @@ class Media(commands.Cog):
             result.poster_url,
             result.overview,
             notes,
+            is_anime=result.is_anime,
         )
         request_row = await self.bot.db.get_media_request(request_id)
 
@@ -686,7 +702,13 @@ class Media(commands.Cog):
         choices = []
         for result in results:
             label = f"{result.title} ({result.year})" if result.year else result.title
-            label = f"{label} · {'Movie' if result.media_type == 'movie' else 'TV'}"
+            if result.media_type == "movie":
+                kind = "Movie"
+            elif result.is_anime:
+                kind = "Anime"
+            else:
+                kind = "TV"
+            label = f"{label} · {kind}"
             choices.append(app_commands.Choice(name=label[:100], value=f"{result.media_type}:{result.tmdb_id}"))
         return choices[:25]
 
