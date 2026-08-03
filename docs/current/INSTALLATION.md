@@ -41,6 +41,10 @@ Warnings, saved playlists, and tickets are stored in a SQLite file, created auto
 
 No extra installation steps — the ticket system uses the same SQLite database. Set `TICKET_CATEGORY_ID` to a channel category if you want ticket channels grouped somewhere specific, and `TICKET_STAFF_ROLE_ID` if ticket staff shouldn't just be `STAFF_ROLE_ID`. Then run `/ticket panel` once in whichever channel members should use to open tickets — it posts a persistent picker that keeps working across restarts.
 
+### Welcome cards
+
+No setup needed beyond `pip install -r requirements.txt` (adds Pillow) — the template graphic ships in the repo at `assets/welcome_card.png`. Set `WELCOME_CHANNEL_ID` to enable it; if you disable ProBot's welcome message on the same channel, this replaces it.
+
 ### Media requests
 
 Grab a free API key from [themoviedb.org](https://www.themoviedb.org/settings/api) (Settings → API) and set `TMDB_API_KEY`. Without it, `/media request` responds with a clear "not configured" message instead of failing. Set `MEDIA_REQUEST_CHANNEL_ID` to wherever staff should see review cards; it defaults to whatever channel a request was made in if left unset.

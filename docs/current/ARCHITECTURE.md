@@ -24,6 +24,10 @@ services/               Everything that isn't Discord-specific: I/O, business lo
   vrms.py                  Narrow systemd wrapper, restricted to one allow-listed unit name.
   tickets.py               Ticket category registry (see "Extending" below).
   tmdb.py                    Read-only TMDB client (search + details) for media request cards.
+  welcome_card.py             Pillow image compositing: a member's avatar onto assets/welcome_card.png.
+
+assets/welcome_card.png  The "VRS" template graphic (transparent PNG); avatars are composited onto
+                        a copy of this at join time, not modified in place.
   music/
     base.py                Track dataclass, MusicProviderError, MusicProvider protocol.
     queue.py                GuildQueue: loop/shuffle/volume/queue state. No Discord imports —
@@ -37,7 +41,7 @@ services/               Everything that isn't Discord-specific: I/O, business lo
 cogs/                    Discord-facing layer: slash commands and event listeners. Each file is
                          auto-loaded by bot.py if it defines an async setup(bot) function.
   admin.py, server.py, utility.py, jellyfin.py, vrms.py, music.py, logging.py,
-  notifications.py, tickets.py, media.py
+  notifications.py, tickets.py, media.py, welcome.py
 
 views/media_buttons.py   A discord.ui.View (external link button) used by /jellyfin search.
 

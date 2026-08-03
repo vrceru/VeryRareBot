@@ -19,7 +19,7 @@ VeryRareBot is configured entirely through environment variables, loaded from a 
 |---|---|
 | `ANNOUNCEMENT_CHANNEL_ID` | `/announce`, `/maintenance` |
 | `LOG_CHANNEL_ID` | Logging cog (joins/leaves/edits/deletes/voice/commands) and unhandled command error reports |
-| `WELCOME_CHANNEL_ID` | Welcome message posted on member join |
+| `WELCOME_CHANNEL_ID` | Welcome card posted on member join (see cogs/welcome.py) |
 | `VRMS_CHANNEL_ID` | Defined but not currently read by any command or notification — VRMS output goes to wherever `/vrms *` is invoked, and outage/recovery notifications use `VRMS_NOTIFY_CHANNEL_ID` instead. Safe to leave unset. |
 
 ## Roles (permission tiers)

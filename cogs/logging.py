@@ -22,9 +22,6 @@ class Logging(commands.Cog):
     def _log_channel(self) -> discord.abc.Messageable | None:
         return self.bot.get_channel(settings.LOG_CHANNEL_ID) if settings.LOG_CHANNEL_ID else None
 
-    def _welcome_channel(self) -> discord.abc.Messageable | None:
-        return self.bot.get_channel(settings.WELCOME_CHANNEL_ID) if settings.WELCOME_CHANNEL_ID else None
-
     async def _send_log(self, embed: discord.Embed) -> None:
         channel = self._log_channel()
         if channel is None:
@@ -36,14 +33,9 @@ class Logging(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
+        # The user-facing welcome message (with the custom card) is handled by cogs/welcome.py;
+        # this stays focused on the LOG_CHANNEL_ID audit trail.
         logger.info("Member joined: %s (%s) in guild %s", member, member.id, member.guild.id)
-
-        welcome_channel = self._welcome_channel()
-        if welcome_channel is not None:
-            try:
-                await welcome_channel.send(f"Welcome to {member.guild.name}, {member.mention}!")
-            except discord.HTTPException:
-                logger.warning("Failed to send a welcome message.")
 
         embed = make_embed("Member Joined", f"{member.mention} ({member})", color=JOIN_COLOR)
         embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, style="R"), inline=True)
