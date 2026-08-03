@@ -429,6 +429,55 @@ class VRMSGateButton(
         await apply_vrms_gate_action(interaction, self.gate, self.action, self.request_id)
 
 
+def _candidate_season(candidate: dict) -> int | None:
+    return (candidate.get("parsed") or {}).get("season")
+
+
+def _curate_release_candidates(candidates: list[dict], limit: int = 25) -> list[dict]:
+    """Groups candidates by parsed season and interleaves across groups (best seeders first
+    within each) so the picker shows season coverage rather than letting one popular season's
+    seeder count crowd out every other season within Discord's 25-option cap. Entries with no
+    parsed season (movies, specials, unparseable titles) are grouped last."""
+    groups: dict[int | None, list[dict]] = {}
+    for candidate in candidates:
+        groups.setdefault(_candidate_season(candidate), []).append(candidate)
+    for group in groups.values():
+        group.sort(key=lambda c: c.get("seeders") or 0, reverse=True)
+
+    ordered_keys = sorted(k for k in groups if k is not None)
+    if None in groups:
+        ordered_keys.append(None)
+
+    curated: list[dict] = []
+    while len(curated) < limit and any(groups[k] for k in ordered_keys):
+        for key in ordered_keys:
+            if groups[key] and len(curated) < limit:
+                curated.append(groups[key].pop(0))
+    return curated
+
+
+def _candidate_option_text(candidate: dict) -> tuple[str, str]:
+    """Builds (label, description) leading with the season/episode -- the thing staff are
+    actually scanning for -- and pushing the (often long, noisy) raw release title down into the
+    description as a secondary reference."""
+    parsed = candidate.get("parsed") or {}
+    season, episode = parsed.get("season"), parsed.get("episode")
+    if season is not None:
+        lead = f"Season {int(season):02d}"
+    elif episode is not None:
+        lead = f"Episode {int(episode)}"
+    else:
+        lead = "Release"
+    bits = []
+    if parsed.get("resolution"):
+        bits.append(parsed["resolution"])
+    if candidate.get("seeders") is not None:
+        bits.append(f"{candidate['seeders']} seeders")
+    label = f"{lead} — {' • '.join(bits)}" if bits else lead
+    description = (candidate.get("title") or "Unknown")[:100]
+    return label[:100], description
+
+
 class ReleaseCandidateSelect(discord.ui.Select):
     """Lets staff pick a different release than VRMS's auto-selected one (e.g. a different
     season) right from the release-approval gate card. Unlike VRMSGateButton this isn't
@@ -438,22 +487,15 @@ class ReleaseCandidateSelect(discord.ui.Select):
 
     def __init__(self, request_id: int, candidates: list[dict], auto_selected_id: str | None):
         self.request_id = request_id
-        self.candidates = candidates[:25]
+        self.candidates = _curate_release_candidates(candidates)
         options = []
         for i, candidate in enumerate(self.candidates):
-            parsed = candidate.get("parsed") or {}
-            bits = []
-            if parsed.get("season") is not None:
-                bits.append(f"S{int(parsed['season']):02d}")
-            if parsed.get("resolution"):
-                bits.append(parsed["resolution"])
-            if candidate.get("seeders") is not None:
-                bits.append(f"{candidate['seeders']} seeders")
+            label, description = _candidate_option_text(candidate)
             options.append(
                 discord.SelectOption(
-                    label=(candidate.get("title") or "Unknown")[:100],
+                    label=label,
                     value=str(i),
-                    description=" • ".join(bits)[:100] or None,
+                    description=description,
                     default=candidate.get("id") == auto_selected_id,
                 )
             )
@@ -593,9 +635,7 @@ class Media(commands.Cog):
             if gate == "release":
                 entries = await client.list_release_approvals()
                 entry = next((e for e in entries if e["id"] == row["vrms_job_id"]), None)
-                candidates = sorted(
-                    (entry or {}).get("candidates") or [], key=lambda c: c.get("seeders") or 0, reverse=True
-                )
+                candidates = (entry or {}).get("candidates") or []
                 auto_selected_id = (entry or {}).get("autoSelectedId")
                 embed = build_release_gate_embed(row["title"], _find_top_release_candidate(entry), len(candidates))
             else:

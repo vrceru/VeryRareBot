@@ -9,6 +9,8 @@ from cogs.media import (
     MediaActionButton,
     ReleaseCandidateSelect,
     VRMSGateButton,
+    _candidate_option_text,
+    _curate_release_candidates,
     _find_top_release_candidate,
     build_final_gate_embed,
     build_gate_view,
@@ -154,19 +156,65 @@ class VRMSGateButtonTemplateTests(unittest.TestCase):
 
     def test_release_candidate_select_marks_auto_selected_default(self):
         candidates = [
-            {"id": "a", "title": "Season 1", "parsed": {"season": 1}, "seeders": 10},
-            {"id": "b", "title": "Season 2", "parsed": {"season": 2}, "seeders": 20},
+            {"id": "a", "title": "[Group] Show S01 1080p", "parsed": {"season": 1, "resolution": "1080p"}, "seeders": 10},
+            {"id": "b", "title": "[Group] Show S02 1080p", "parsed": {"season": 2, "resolution": "1080p"}, "seeders": 20},
         ]
         select = ReleaseCandidateSelect(1, candidates, "b")
         self.assertFalse(select.options[0].default)
         self.assertTrue(select.options[1].default)
-        self.assertIn("S02", select.options[1].description)
+        self.assertIn("Season 02", select.options[1].label)
 
     def test_release_candidate_select_resolves_index_to_candidate_id(self):
-        candidates = [{"id": "magnet:a", "title": "A", "parsed": {}}, {"id": "magnet:b", "title": "B", "parsed": {}}]
+        candidates = [
+            {"id": "magnet:a", "title": "A", "parsed": {"season": 1}},
+            {"id": "magnet:b", "title": "B", "parsed": {"season": 2}},
+        ]
         select = ReleaseCandidateSelect(1, candidates, None)
         chosen = select.candidates[int(select.options[1].value)]
         self.assertEqual(chosen["id"], "magnet:b")
+
+
+class ReleaseCandidateCurationTests(unittest.TestCase):
+    def test_groups_by_season_and_interleaves_for_coverage(self):
+        candidates = [
+            {"id": "s1-a", "title": "S1 best", "parsed": {"season": 1}, "seeders": 100},
+            {"id": "s1-b", "title": "S1 second", "parsed": {"season": 1}, "seeders": 50},
+            {"id": "s2-a", "title": "S2 only", "parsed": {"season": 2}, "seeders": 5},
+        ]
+        curated = _curate_release_candidates(candidates)
+        # Season 2's only release appears before Season 1's second release, even though it's
+        # far behind on seeders -- season coverage wins over raw popularity within one season.
+        self.assertEqual([c["id"] for c in curated], ["s1-a", "s2-a", "s1-b"])
+
+    def test_caps_at_limit(self):
+        candidates = [{"id": str(i), "title": "x", "parsed": {"season": 1}, "seeders": i} for i in range(30)]
+        curated = _curate_release_candidates(candidates, limit=25)
+        self.assertEqual(len(curated), 25)
+
+    def test_unspecified_season_sorted_last_regardless_of_seeders(self):
+        candidates = [
+            {"id": "movie", "title": "Movie release", "parsed": {}, "seeders": 999},
+            {"id": "s1", "title": "Show S01", "parsed": {"season": 1}, "seeders": 1},
+        ]
+        curated = _curate_release_candidates(candidates)
+        self.assertEqual([c["id"] for c in curated], ["s1", "movie"])
+
+
+class CandidateOptionTextTests(unittest.TestCase):
+    def test_leads_with_season_and_quality(self):
+        label, description = _candidate_option_text(
+            {"title": "[Group] Show S02 1080p", "parsed": {"season": 2, "resolution": "1080p"}, "seeders": 20}
+        )
+        self.assertTrue(label.startswith("Season 02"))
+        self.assertIn("1080p", label)
+        self.assertIn("20 seeders", label)
+        self.assertEqual(description, "[Group] Show S02 1080p")
+
+    def test_falls_back_to_episode_then_bare_release(self):
+        label, _ = _candidate_option_text({"title": "x", "parsed": {"episode": 5}})
+        self.assertTrue(label.startswith("Episode 5"))
+        label, _ = _candidate_option_text({"title": "x", "parsed": {}})
+        self.assertEqual(label, "Release")
 
 
 class VRMSGateEmbedTests(unittest.TestCase):
