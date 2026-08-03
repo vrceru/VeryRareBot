@@ -7,11 +7,12 @@ from cogs.media import (
     STATUS_LABELS,
     TRANSITIONS,
     MediaActionButton,
-    ReleaseCandidateSelect,
+    ReleaseWithinSeasonSelect,
+    SeasonPickerSelect,
     VRMSGateButton,
-    _candidate_option_text,
-    _curate_release_candidates,
     _find_top_release_candidate,
+    _group_candidates_by_season,
+    _within_season_option_text,
     build_final_gate_embed,
     build_gate_view,
     build_release_gate_embed,
@@ -142,11 +143,25 @@ class VRMSGateButtonTemplateTests(unittest.TestCase):
         view = build_gate_view("final", 1)
         self.assertEqual(len(view.children), 2)
 
-    def test_release_gate_view_adds_picker_with_multiple_candidates(self):
-        candidates = [{"id": "a", "title": "A", "parsed": {}}, {"id": "b", "title": "B", "parsed": {}}]
+    def test_release_gate_view_adds_season_picker_with_multiple_seasons(self):
+        candidates = [
+            {"id": "a", "title": "A", "parsed": {"season": 1}},
+            {"id": "b", "title": "B", "parsed": {"season": 2}},
+        ]
         view = build_gate_view("release", 1, candidates, "a")
         self.assertEqual(len(view.children), 3)
-        self.assertIsInstance(view.children[0], ReleaseCandidateSelect)
+        self.assertIsInstance(view.children[0], SeasonPickerSelect)
+
+    def test_release_gate_view_skips_straight_to_release_picker_with_one_season(self):
+        # Nothing to disambiguate at the season level (a single season, or a movie/season-less
+        # pool) -- skip step 1 and go straight to picking a specific release.
+        candidates = [
+            {"id": "a", "title": "A", "parsed": {"season": 1}, "seeders": 10},
+            {"id": "b", "title": "B", "parsed": {"season": 1}, "seeders": 20},
+        ]
+        view = build_gate_view("release", 1, candidates, "a")
+        self.assertEqual(len(view.children), 3)
+        self.assertIsInstance(view.children[0], ReleaseWithinSeasonSelect)
 
     def test_release_gate_view_skips_picker_with_one_or_no_candidates(self):
         view = build_gate_view("release", 1, [{"id": "a", "title": "A", "parsed": {}}], "a")
@@ -154,66 +169,77 @@ class VRMSGateButtonTemplateTests(unittest.TestCase):
         view = build_gate_view("release", 1, [], None)
         self.assertEqual(len(view.children), 2)
 
-    def test_release_candidate_select_marks_auto_selected_default(self):
+
+class SeasonPickerSelectTests(unittest.TestCase):
+    def test_lists_each_season_with_a_release_count(self):
+        groups = _group_candidates_by_season(
+            [
+                {"id": "a", "title": "A", "parsed": {"season": 1}},
+                {"id": "b", "title": "B", "parsed": {"season": 1}},
+                {"id": "c", "title": "C", "parsed": {"season": 2}},
+            ]
+        )
+        select = SeasonPickerSelect(1, groups, None)
+        labels = [opt.label for opt in select.options]
+        self.assertEqual(labels, ["Season 01 (2 releases)", "Season 02 (1 release)"])
+
+    def test_unspecified_season_listed_last(self):
+        groups = _group_candidates_by_season(
+            [{"id": "m", "title": "Movie", "parsed": {}}, {"id": "s", "title": "Show S01", "parsed": {"season": 1}}]
+        )
+        select = SeasonPickerSelect(1, groups, None)
+        self.assertEqual([opt.value for opt in select.options], ["1", "none"])
+
+    def test_callback_swaps_in_a_release_picker_scoped_to_the_chosen_season(self):
+        groups = _group_candidates_by_season(
+            [
+                {"id": "s1", "title": "S1", "parsed": {"season": 1}, "seeders": 5},
+                {"id": "s2", "title": "S2", "parsed": {"season": 2}, "seeders": 5},
+            ]
+        )
+        select = SeasonPickerSelect(1, groups, None)
+        release_picker = ReleaseWithinSeasonSelect(1, groups[2], None)
+        self.assertEqual([c["id"] for c in release_picker.candidates], ["s2"])
+
+
+class ReleaseWithinSeasonSelectTests(unittest.TestCase):
+    def test_marks_auto_selected_default(self):
         candidates = [
-            {"id": "a", "title": "[Group] Show S01 1080p", "parsed": {"season": 1, "resolution": "1080p"}, "seeders": 10},
-            {"id": "b", "title": "[Group] Show S02 1080p", "parsed": {"season": 2, "resolution": "1080p"}, "seeders": 20},
+            {"id": "a", "title": "[Group] Show 1080p", "parsed": {"resolution": "1080p"}, "seeders": 10},
+            {"id": "b", "title": "[Group] Show 2160p", "parsed": {"resolution": "2160p"}, "seeders": 20},
         ]
-        select = ReleaseCandidateSelect(1, candidates, "b")
+        select = ReleaseWithinSeasonSelect(1, candidates, "b")
         self.assertFalse(select.options[0].default)
         self.assertTrue(select.options[1].default)
-        self.assertIn("Season 02", select.options[1].label)
 
-    def test_release_candidate_select_resolves_index_to_candidate_id(self):
-        candidates = [
-            {"id": "magnet:a", "title": "A", "parsed": {"season": 1}},
-            {"id": "magnet:b", "title": "B", "parsed": {"season": 2}},
-        ]
-        select = ReleaseCandidateSelect(1, candidates, None)
+    def test_resolves_index_to_candidate_id(self):
+        candidates = [{"id": "magnet:a", "title": "A", "parsed": {}}, {"id": "magnet:b", "title": "B", "parsed": {}}]
+        select = ReleaseWithinSeasonSelect(1, candidates, None)
         chosen = select.candidates[int(select.options[1].value)]
         self.assertEqual(chosen["id"], "magnet:b")
 
 
-class ReleaseCandidateCurationTests(unittest.TestCase):
-    def test_groups_by_season_and_interleaves_for_coverage(self):
-        candidates = [
-            {"id": "s1-a", "title": "S1 best", "parsed": {"season": 1}, "seeders": 100},
-            {"id": "s1-b", "title": "S1 second", "parsed": {"season": 1}, "seeders": 50},
-            {"id": "s2-a", "title": "S2 only", "parsed": {"season": 2}, "seeders": 5},
-        ]
-        curated = _curate_release_candidates(candidates)
-        # Season 2's only release appears before Season 1's second release, even though it's
-        # far behind on seeders -- season coverage wins over raw popularity within one season.
-        self.assertEqual([c["id"] for c in curated], ["s1-a", "s2-a", "s1-b"])
-
-    def test_caps_at_limit(self):
-        candidates = [{"id": str(i), "title": "x", "parsed": {"season": 1}, "seeders": i} for i in range(30)]
-        curated = _curate_release_candidates(candidates, limit=25)
-        self.assertEqual(len(curated), 25)
-
-    def test_unspecified_season_sorted_last_regardless_of_seeders(self):
-        candidates = [
-            {"id": "movie", "title": "Movie release", "parsed": {}, "seeders": 999},
-            {"id": "s1", "title": "Show S01", "parsed": {"season": 1}, "seeders": 1},
-        ]
-        curated = _curate_release_candidates(candidates)
-        self.assertEqual([c["id"] for c in curated], ["s1", "movie"])
-
-
-class CandidateOptionTextTests(unittest.TestCase):
-    def test_leads_with_season_and_quality(self):
-        label, description = _candidate_option_text(
-            {"title": "[Group] Show S02 1080p", "parsed": {"season": 2, "resolution": "1080p"}, "seeders": 20}
+class GroupCandidatesBySeasonTests(unittest.TestCase):
+    def test_sorts_each_group_by_seeders_descending(self):
+        groups = _group_candidates_by_season(
+            [
+                {"id": "low", "title": "x", "parsed": {"season": 1}, "seeders": 5},
+                {"id": "high", "title": "x", "parsed": {"season": 1}, "seeders": 50},
+            ]
         )
-        self.assertTrue(label.startswith("Season 02"))
-        self.assertIn("1080p", label)
-        self.assertIn("20 seeders", label)
-        self.assertEqual(description, "[Group] Show S02 1080p")
+        self.assertEqual([c["id"] for c in groups[1]], ["high", "low"])
 
-    def test_falls_back_to_episode_then_bare_release(self):
-        label, _ = _candidate_option_text({"title": "x", "parsed": {"episode": 5}})
-        self.assertTrue(label.startswith("Episode 5"))
-        label, _ = _candidate_option_text({"title": "x", "parsed": {}})
+
+class WithinSeasonOptionTextTests(unittest.TestCase):
+    def test_leads_with_quality_not_season(self):
+        label, description = _within_season_option_text(
+            {"title": "[Group] Show S02 1080p BluRay", "parsed": {"resolution": "1080p", "source": "bluray"}, "seeders": 20}
+        )
+        self.assertEqual(label, "1080p • bluray • 20 seeders")
+        self.assertEqual(description, "[Group] Show S02 1080p BluRay")
+
+    def test_falls_back_to_bare_release_label(self):
+        label, _ = _within_season_option_text({"title": "x", "parsed": {}})
         self.assertEqual(label, "Release")
 
 

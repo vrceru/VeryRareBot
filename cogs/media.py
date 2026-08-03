@@ -343,7 +343,12 @@ def build_gate_view(
 ) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if gate == "release" and candidates and len(candidates) > 1:
-        view.add_item(ReleaseCandidateSelect(request_id, candidates, auto_selected_id))
+        groups = _group_candidates_by_season(candidates)
+        if len(groups) > 1:
+            view.add_item(SeasonPickerSelect(request_id, groups, auto_selected_id))
+        else:
+            only_key = next(iter(groups))
+            view.add_item(ReleaseWithinSeasonSelect(request_id, groups[only_key], auto_selected_id))
     view.add_item(VRMSGateButton(gate, "approve", request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅"))
     view.add_item(VRMSGateButton(gate, "deny", request_id, label="Deny", style=discord.ButtonStyle.danger, emoji="❌"))
     return view
@@ -433,64 +438,59 @@ def _candidate_season(candidate: dict) -> int | None:
     return (candidate.get("parsed") or {}).get("season")
 
 
-def _curate_release_candidates(candidates: list[dict], limit: int = 25) -> list[dict]:
-    """Groups candidates by parsed season and interleaves across groups (best seeders first
-    within each) so the picker shows season coverage rather than letting one popular season's
-    seeder count crowd out every other season within Discord's 25-option cap. Entries with no
-    parsed season (movies, specials, unparseable titles) are grouped last."""
+def _group_candidates_by_season(candidates: list[dict]) -> dict[int | None, list[dict]]:
+    """Groups candidates by parsed season, each group sorted best-seeders-first. Entries with
+    no parsed season (movies, specials, unparseable titles) land under the `None` key."""
     groups: dict[int | None, list[dict]] = {}
     for candidate in candidates:
         groups.setdefault(_candidate_season(candidate), []).append(candidate)
     for group in groups.values():
         group.sort(key=lambda c: c.get("seeders") or 0, reverse=True)
+    return groups
 
-    ordered_keys = sorted(k for k in groups if k is not None)
+
+def _ordered_season_keys(groups: dict[int | None, list[dict]]) -> list[int | None]:
+    keys = sorted(k for k in groups if k is not None)
     if None in groups:
-        ordered_keys.append(None)
-
-    curated: list[dict] = []
-    while len(curated) < limit and any(groups[k] for k in ordered_keys):
-        for key in ordered_keys:
-            if groups[key] and len(curated) < limit:
-                curated.append(groups[key].pop(0))
-    return curated
+        keys.append(None)
+    return keys
 
 
-def _candidate_option_text(candidate: dict) -> tuple[str, str]:
-    """Builds (label, description) leading with the season/episode -- the thing staff are
-    actually scanning for -- and pushing the (often long, noisy) raw release title down into the
-    description as a secondary reference."""
+def _season_option_label(season_key: int | None, count: int) -> str:
+    name = f"Season {season_key:02d}" if season_key is not None else "Unspecified / Movie"
+    return f"{name} ({count} release{'s' if count != 1 else ''})"
+
+
+def _within_season_option_text(candidate: dict) -> tuple[str, str]:
+    """Builds (label, description) for a release *within* an already-chosen season -- leads
+    with quality info since season is no longer the thing being scanned for, and pushes the raw
+    (often long, noisy) release title down into the description as a secondary reference."""
     parsed = candidate.get("parsed") or {}
-    season, episode = parsed.get("season"), parsed.get("episode")
-    if season is not None:
-        lead = f"Season {int(season):02d}"
-    elif episode is not None:
-        lead = f"Episode {int(episode)}"
-    else:
-        lead = "Release"
     bits = []
     if parsed.get("resolution"):
         bits.append(parsed["resolution"])
+    if parsed.get("source"):
+        bits.append(parsed["source"])
     if candidate.get("seeders") is not None:
         bits.append(f"{candidate['seeders']} seeders")
-    label = f"{lead} — {' • '.join(bits)}" if bits else lead
+    label = " • ".join(bits) if bits else "Release"
     description = (candidate.get("title") or "Unknown")[:100]
     return label[:100], description
 
 
-class ReleaseCandidateSelect(discord.ui.Select):
-    """Lets staff pick a different release than VRMS's auto-selected one (e.g. a different
-    season) right from the release-approval gate card. Unlike VRMSGateButton this isn't
-    restart-persistent -- a bot restart before staff picks one just means the dropdown goes
-    dead, while the Approve/Deny buttons alongside it (which keep VRMS's own auto-pick) still
-    work as the reliable fallback."""
+class ReleaseWithinSeasonSelect(discord.ui.Select):
+    """Step 2 of the release picker: choose a specific release within the season picked in step
+    1 (or the only season/season-less pool, when there's nothing to disambiguate at that level).
+    Unlike VRMSGateButton this isn't restart-persistent -- a bot restart before staff picks one
+    just means the dropdown goes dead, while the Approve/Deny buttons alongside it (which keep
+    VRMS's own auto-pick) still work as the reliable fallback."""
 
     def __init__(self, request_id: int, candidates: list[dict], auto_selected_id: str | None):
         self.request_id = request_id
-        self.candidates = _curate_release_candidates(candidates)
+        self.candidates = candidates[:25]
         options = []
         for i, candidate in enumerate(self.candidates):
-            label, description = _candidate_option_text(candidate)
+            label, description = _within_season_option_text(candidate)
             options.append(
                 discord.SelectOption(
                     label=label,
@@ -499,11 +499,51 @@ class ReleaseCandidateSelect(discord.ui.Select):
                     default=candidate.get("id") == auto_selected_id,
                 )
             )
-        super().__init__(placeholder="Pick a different release…", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="Pick a release…", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         chosen = self.candidates[int(self.values[0])]
         await apply_vrms_gate_action(interaction, "release", "approve", self.request_id, candidate_id=chosen["id"])
+
+
+class SeasonPickerSelect(discord.ui.Select):
+    """Step 1 of the release picker: choose a season. Picking one edits the message in place to
+    add a ReleaseWithinSeasonSelect scoped to just that season, alongside this same season
+    picker (so a different season can still be picked without starting over) and the existing
+    Approve/Deny buttons."""
+
+    def __init__(
+        self,
+        request_id: int,
+        groups: dict[int | None, list[dict]],
+        auto_selected_id: str | None,
+        selected_key: int | None = None,
+    ):
+        self.request_id = request_id
+        self.groups = groups
+        self.auto_selected_id = auto_selected_id
+        options = [
+            discord.SelectOption(
+                label=_season_option_label(key, len(groups[key])),
+                value=str(key) if key is not None else "none",
+                default=key == selected_key,
+            )
+            for key in _ordered_season_keys(groups)
+        ]
+        super().__init__(placeholder="Step 1: pick a season…", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        chosen_key = None if self.values[0] == "none" else int(self.values[0])
+        view = discord.ui.View(timeout=None)
+        view.add_item(SeasonPickerSelect(self.request_id, self.groups, self.auto_selected_id, selected_key=chosen_key))
+        view.add_item(ReleaseWithinSeasonSelect(self.request_id, self.groups[chosen_key], self.auto_selected_id))
+        view.add_item(
+            VRMSGateButton("release", "approve", self.request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅")
+        )
+        view.add_item(
+            VRMSGateButton("release", "deny", self.request_id, label="Deny", style=discord.ButtonStyle.danger, emoji="❌")
+        )
+        await interaction.response.edit_message(view=view)
 
 
 class QueueBrowserView(discord.ui.View):
