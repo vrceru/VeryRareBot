@@ -1,7 +1,8 @@
-"""Media requests: users request a title, staff approve/deny/hold it, and track its
-progress toward download. This is Discord-side only -- there's no VRMS API yet, so
-status moves forward only when staff click a button. Once VRMS exposes one, the
-"downloading"/"completed" transitions here are the natural place to wire it in.
+"""Media requests: users request a title, staff approve/deny/hold it, and VRMS (once
+configured) takes it from "approved" through download to the library, pausing at its
+own two admin-approval gates along the way. See docs/current/VRMS_INTEGRATION.md for
+the full design. Without VRMS_API_URL configured, this cog still works exactly as
+before: staff manually mark things "downloading"/"completed" by hand.
 """
 
 import logging
@@ -9,12 +10,13 @@ import re
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from config import settings
 from core.checks import has_any_role
 from core.embed import error_embed, make_embed, success_embed
 from services.tmdb import TMDBClient, TMDBError
+from services.vrms_api import VRMSAPIClient, VRMSAPIError
 
 logger = logging.getLogger("VeryRareBot")
 
@@ -26,6 +28,7 @@ STATUS_LABELS = {
     "completed": "🎉 Completed",
     "denied": "❌ Denied",
     "cancelled": "🚫 Cancelled",
+    "failed": "💥 Failed",
 }
 
 STATUS_COLORS = {
@@ -36,9 +39,12 @@ STATUS_COLORS = {
     "completed": discord.Color.dark_green(),
     "denied": discord.Color.red(),
     "cancelled": discord.Color.light_grey(),
+    "failed": discord.Color.dark_red(),
 }
 
 ACTIVE_STATUSES = ["pending", "on_hold", "approved", "downloading"]
+TERMINAL_STATUSES = {"completed", "denied", "cancelled", "failed"}
+GATE_COLOR = discord.Color.gold()
 
 STATUS_FILTER_CHOICES = [app_commands.Choice(name=label, value=key) for key, label in STATUS_LABELS.items()]
 
@@ -80,7 +86,11 @@ def build_request_embed(request) -> discord.Embed:
     return embed
 
 
-def build_status_view(request_id: int, status: str) -> discord.ui.View:
+def build_status_view(request) -> discord.ui.View:
+    request_id = request["id"]
+    status = request["status"]
+    has_vrms_job = bool(request["vrms_job_id"])
+
     view = discord.ui.View(timeout=None)
     if status == "pending":
         view.add_item(MediaActionButton("approve", request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅"))
@@ -90,15 +100,84 @@ def build_status_view(request_id: int, status: str) -> discord.ui.View:
         view.add_item(MediaActionButton("approve", request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅"))
         view.add_item(MediaActionButton("deny", request_id, label="Deny", style=discord.ButtonStyle.danger, emoji="❌"))
     elif status == "approved":
-        view.add_item(
-            MediaActionButton("downloading", request_id, label="Mark Downloading", style=discord.ButtonStyle.primary, emoji="⬇️")
-        )
+        # With a VRMS job attached, the polling loop advances this automatically once VRMS
+        # actually starts working -- the manual button is only needed as a fallback when VRMS
+        # isn't configured, or its enqueue call failed.
+        if not has_vrms_job:
+            view.add_item(
+                MediaActionButton("downloading", request_id, label="Mark Downloading", style=discord.ButtonStyle.primary, emoji="⬇️")
+            )
         view.add_item(MediaActionButton("deny", request_id, label="Cancel", style=discord.ButtonStyle.danger, emoji="❌"))
     elif status == "downloading":
-        view.add_item(
-            MediaActionButton("completed", request_id, label="Mark Completed", style=discord.ButtonStyle.success, emoji="🎉")
-        )
+        if not has_vrms_job:
+            view.add_item(
+                MediaActionButton("completed", request_id, label="Mark Completed", style=discord.ButtonStyle.success, emoji="🎉")
+            )
     return view
+
+
+async def _apply_status(bot, request_id: int, new_status: str, reviewer_id: int | None = None):
+    """Update a request's status in the DB and return the fresh row."""
+    await bot.db.update_media_request_status(request_id, new_status, reviewer_id=reviewer_id)
+    return await bot.db.get_media_request(request_id)
+
+
+async def _notify_requester(bot, request, new_status: str) -> None:
+    if new_status not in {"approved", "denied", "completed", "failed"}:
+        return
+    guild = bot.get_guild(request["guild_id"])
+    requester = guild.get_member(request["requester_id"]) if guild else None
+    if requester is None:
+        return
+    try:
+        await requester.send(
+            embed=make_embed(
+                f"Your request for {request['title']} is now {STATUS_LABELS.get(new_status, new_status)}",
+                color=STATUS_COLORS.get(new_status),
+            )
+        )
+    except discord.HTTPException:
+        pass
+
+
+async def _refresh_request_card(bot, request) -> None:
+    """Edit the main request card from outside an interaction context (the VRMS polling loop)."""
+    if not (request["card_channel_id"] and request["card_message_id"]):
+        return
+    channel = bot.get_channel(request["card_channel_id"])
+    if channel is None:
+        return
+    try:
+        message = await channel.fetch_message(request["card_message_id"])
+        await message.edit(embed=build_request_embed(request), view=build_status_view(request))
+    except discord.HTTPException:
+        logger.warning("Failed to refresh the card for media request #%s.", request["id"])
+
+
+async def _start_vrms_job_if_configured(bot, request) -> tuple[dict, str | None]:
+    """On approve, try to start the request as a VRMS job. Returns (possibly-updated request,
+    an error note to show staff if the call failed). VRMS being unconfigured is not an error --
+    the request just stays on the manual fallback path."""
+    try:
+        client = VRMSAPIClient.from_settings()
+    except VRMSAPIError:
+        return request, None
+
+    media_type = "show" if request["media_type"] == "tv" else request["media_type"]
+    try:
+        job = await client.enqueue(
+            request["title"],
+            media_type,
+            year=int(request["year"]) if request["year"] else None,
+            metadata_id=str(request["tmdb_id"]),
+        )
+    except VRMSAPIError as exc:
+        logger.warning("VRMS enqueue failed for media request #%s: %s", request["id"], exc)
+        return request, f"Approved locally, but starting it in VRMS failed: {exc}"
+
+    await bot.db.set_media_request_vrms_job(request["id"], job["id"])
+    updated = await bot.db.get_media_request(request["id"])
+    return updated, None
 
 
 async def apply_media_action(interaction: discord.Interaction, action: str, request_id: int) -> None:
@@ -120,24 +199,19 @@ async def apply_media_action(interaction: discord.Interaction, action: str, requ
         )
         return
 
-    await bot.db.update_media_request_status(request_id, new_status, reviewer_id=interaction.user.id)
-    updated = await bot.db.get_media_request(request_id)
+    updated = await _apply_status(bot, request_id, new_status, reviewer_id=interaction.user.id)
 
-    await interaction.response.edit_message(embed=build_request_embed(updated), view=build_status_view(request_id, new_status))
+    vrms_note = None
+    if action == "approve":
+        updated, vrms_note = await _start_vrms_job_if_configured(bot, updated)
+
+    await interaction.response.edit_message(embed=build_request_embed(updated), view=build_status_view(updated))
     logger.info("Media request #%s -> %s by %s", request_id, new_status, interaction.user)
 
-    if new_status in {"approved", "denied", "completed"} and interaction.guild is not None:
-        requester = interaction.guild.get_member(request["requester_id"])
-        if requester is not None:
-            try:
-                await requester.send(
-                    embed=make_embed(
-                        f"Your request for {updated['title']} is now {STATUS_LABELS.get(new_status, new_status)}",
-                        color=STATUS_COLORS.get(new_status),
-                    )
-                )
-            except discord.HTTPException:
-                pass
+    await _notify_requester(bot, updated, new_status)
+
+    if vrms_note:
+        await interaction.followup.send(embed=error_embed("VRMS Not Started", vrms_note), ephemeral=True)
 
 
 class MediaActionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"media:(?P<action>[a-z]+):(?P<request_id>\d+)"):
@@ -163,6 +237,133 @@ class MediaActionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"me
 
     async def callback(self, interaction: discord.Interaction):
         await apply_media_action(interaction, self.action, self.request_id)
+
+
+def _find_top_release_candidate(release_entry: dict | None) -> dict | None:
+    if not release_entry:
+        return None
+    candidates = release_entry.get("candidates") or []
+    auto_id = release_entry.get("autoSelectedId")
+    for candidate in candidates:
+        if candidate.get("id") == auto_id:
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def build_release_gate_embed(title: str, candidate: dict | None) -> discord.Embed:
+    embed = make_embed("VRMS: Approve Release?", title, color=GATE_COLOR)
+    if candidate is None:
+        embed.add_field(name="Candidates", value="No candidate releases were found.", inline=False)
+    else:
+        parsed = candidate.get("parsed") or {}
+        embed.add_field(name="Release", value=(candidate.get("title") or "Unknown")[:1024], inline=False)
+        if parsed.get("resolution"):
+            embed.add_field(name="Resolution", value=parsed["resolution"], inline=True)
+        if parsed.get("source"):
+            embed.add_field(name="Source", value=parsed["source"], inline=True)
+        if candidate.get("seeders") is not None:
+            embed.add_field(name="Seeders", value=str(candidate["seeders"]), inline=True)
+    embed.set_footer(text="Approving keeps VRMS's auto-selected release.")
+    return embed
+
+
+def build_final_gate_embed(title: str, entry: dict) -> discord.Embed:
+    metadata = entry.get("metadata") or {}
+    storage = entry.get("storage") or {}
+    embed = make_embed("VRMS: Approve Final Copy?", metadata.get("overview"), color=GATE_COLOR)
+    matched_title = metadata.get("title") or title
+    year = metadata.get("year")
+    embed.add_field(name="Matched Title", value=f"{matched_title} ({year})" if year else matched_title, inline=False)
+    if metadata.get("posterUrl"):
+        embed.set_thumbnail(url=metadata["posterUrl"])
+    if "hasEnoughSpace" in storage:
+        embed.add_field(name="Storage", value="✅ Enough space" if storage["hasEnoughSpace"] else "⚠️ Not enough space", inline=True)
+    elif storage.get("error"):
+        embed.add_field(name="Storage Check", value=f"⚠️ {storage['error']}", inline=True)
+    embed.set_footer(text="Approving moves the file into the library and updates Jellyfin.")
+    return embed
+
+
+def build_gate_view(gate: str, request_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(VRMSGateButton(gate, "approve", request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅"))
+    view.add_item(VRMSGateButton(gate, "deny", request_id, label="Deny", style=discord.ButtonStyle.danger, emoji="❌"))
+    return view
+
+
+async def apply_vrms_gate_action(interaction: discord.Interaction, gate: str, action: str, request_id: int) -> None:
+    bot = interaction.client
+    request = await bot.db.get_media_request(request_id)
+
+    if request is None or not request["vrms_job_id"]:
+        await interaction.response.send_message(embed=error_embed("Not Found", "This VRMS job no longer exists."), ephemeral=True)
+        return
+    if not _is_staff(interaction):
+        await interaction.response.send_message(embed=error_embed("Not Allowed", "Only staff can approve VRMS gates."), ephemeral=True)
+        return
+
+    try:
+        client = VRMSAPIClient.from_settings()
+    except VRMSAPIError as exc:
+        await interaction.response.send_message(embed=error_embed("VRMS Unavailable", str(exc)), ephemeral=True)
+        return
+
+    try:
+        if gate == "release":
+            await (client.approve_release(request["vrms_job_id"]) if action == "approve" else client.deny_release(request["vrms_job_id"]))
+        else:
+            await (client.approve_final(request["vrms_job_id"]) if action == "approve" else client.deny_final(request["vrms_job_id"]))
+    except VRMSAPIError as exc:
+        await interaction.response.send_message(embed=error_embed("VRMS Error", str(exc)), ephemeral=True)
+        return
+
+    await bot.db.clear_media_request_gate_message(request_id)
+    logger.info("VRMS %s gate %s for media request #%s by %s", gate, action, request_id, interaction.user)
+
+    if action == "deny":
+        # Denying a gate cancels the whole VRMS job -- reflect that on the main request card too.
+        updated = await _apply_status(bot, request_id, "denied", reviewer_id=interaction.user.id)
+        await _refresh_request_card(bot, updated)
+        await _notify_requester(bot, updated, "denied")
+
+    await interaction.response.edit_message(
+        embed=make_embed(
+            "Gate Resolved",
+            f"{'Approved' if action == 'approve' else 'Denied'} — see the main request card for status.",
+            color=discord.Color.light_grey(),
+        ),
+        view=None,
+    )
+
+
+class VRMSGateButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"vrms_gate:(?P<gate>release|final):(?P<action>approve|deny):(?P<request_id>\d+)",
+):
+    """Approve/Deny buttons for VRMS's two admin-approval gates. Separate custom_id template
+    from MediaActionButton's so the two dynamic item types never collide."""
+
+    def __init__(self, gate: str, action: str, request_id: int, *, label: str, style: discord.ButtonStyle, emoji: str):
+        super().__init__(
+            discord.ui.Button(label=label, style=style, emoji=emoji, custom_id=f"vrms_gate:{gate}:{action}:{request_id}")
+        )
+        self.gate = gate
+        self.action = action
+        self.request_id = request_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match[str]):
+        return cls(
+            gate=match["gate"],
+            action=match["action"],
+            request_id=int(match["request_id"]),
+            label=item.label,
+            style=item.style,
+            emoji=item.emoji,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await apply_vrms_gate_action(interaction, self.gate, self.action, self.request_id)
 
 
 class QueueBrowserView(discord.ui.View):
@@ -203,7 +404,113 @@ class Media(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        bot.add_dynamic_items(MediaActionButton)
+        bot.add_dynamic_items(MediaActionButton, VRMSGateButton)
+
+        if settings.VRMS_API_URL:
+            self.vrms_job_watch.change_interval(seconds=max(settings.VRMS_JOB_POLL_SECONDS, 15))
+            self.vrms_job_watch.start()
+
+    async def cog_unload(self) -> None:
+        self.vrms_job_watch.cancel()
+
+    @tasks.loop(seconds=30)
+    async def vrms_job_watch(self):
+        try:
+            client = VRMSAPIClient.from_settings()
+        except VRMSAPIError:
+            return
+
+        rows = await self.bot.db.list_media_requests_with_vrms_job()
+        for row in rows:
+            try:
+                job = await client.get_job(row["vrms_job_id"])
+            except VRMSAPIError as exc:
+                logger.debug("VRMS job poll failed for request #%s: %s", row["id"], exc)
+                continue
+            try:
+                await self._handle_vrms_job_update(row, job, client)
+            except Exception:
+                logger.exception("Failed to process a VRMS job update for request #%s", row["id"])
+
+    @vrms_job_watch.before_loop
+    async def before_vrms_job_watch(self):
+        await self.bot.wait_until_ready()
+
+    async def _handle_vrms_job_update(self, row, job: dict, client: VRMSAPIClient) -> None:
+        bot = self.bot
+        status = job.get("status")
+        request_id = row["id"]
+
+        if status == "completed":
+            await self._clear_vrms_gate(row)
+            updated = await _apply_status(bot, request_id, "completed")
+            await _refresh_request_card(bot, updated)
+            await _notify_requester(bot, updated, "completed")
+            return
+
+        if status in ("failed", "cancelled"):
+            await self._clear_vrms_gate(row)
+            updated = await _apply_status(bot, request_id, "failed")
+            await _refresh_request_card(bot, updated)
+            await _notify_requester(bot, updated, "failed")
+            return
+
+        if status == "awaiting_release_approval":
+            await self._ensure_vrms_gate_card(row, "release", client)
+            return
+
+        if status == "awaiting_final_approval":
+            await self._ensure_vrms_gate_card(row, "final", client)
+            return
+
+        # pending/running/paused: actively progressing, or waiting to retry after a transient
+        # failure. Clear a leftover gate card if the job has since moved past it.
+        if row["vrms_gate_message_id"]:
+            await self._clear_vrms_gate(row)
+
+        if status == "running" and row["status"] == "approved":
+            updated = await _apply_status(bot, request_id, "downloading")
+            await _refresh_request_card(bot, updated)
+
+    async def _ensure_vrms_gate_card(self, row, gate: str, client: VRMSAPIClient) -> None:
+        if row["vrms_gate_message_id"]:
+            return  # already showing a card for the current gate
+
+        channel = self.bot.get_channel(row["card_channel_id"]) if row["card_channel_id"] else None
+        if channel is None:
+            return
+
+        try:
+            if gate == "release":
+                entries = await client.list_release_approvals()
+                entry = next((e for e in entries if e["id"] == row["vrms_job_id"]), None)
+                embed = build_release_gate_embed(row["title"], _find_top_release_candidate(entry))
+            else:
+                entries = await client.list_final_approvals()
+                entry = next((e for e in entries if e["id"] == row["vrms_job_id"]), None)
+                embed = build_final_gate_embed(row["title"], entry or {})
+        except VRMSAPIError as exc:
+            logger.debug("Failed to fetch VRMS %s gate detail for request #%s: %s", gate, row["id"], exc)
+            return
+
+        try:
+            message = await channel.send(embed=embed, view=build_gate_view(gate, row["id"]))
+        except discord.HTTPException:
+            logger.warning("Failed to post the VRMS %s gate card for request #%s.", gate, row["id"])
+            return
+        await self.bot.db.set_media_request_gate_message(row["id"], channel.id, message.id)
+
+    async def _clear_vrms_gate(self, row) -> None:
+        if not row["vrms_gate_message_id"]:
+            return
+        channel = self.bot.get_channel(row["vrms_gate_channel_id"]) if row["vrms_gate_channel_id"] else None
+        if channel is not None:
+            try:
+                message = await channel.fetch_message(row["vrms_gate_message_id"])
+                await message.edit(view=None)
+            except discord.HTTPException:
+                pass
+        await self.bot.db.clear_media_request_gate_message(row["id"])
 
     @media.command(name="request", description="Request a movie or TV show.")
     @app_commands.describe(title="Start typing a title, then pick a suggestion.", notes="Anything staff should know (optional).")
@@ -260,7 +567,7 @@ class Media(commands.Cog):
         request_row = await self.bot.db.get_media_request(request_id)
 
         channel = self.bot.get_channel(settings.MEDIA_REQUEST_CHANNEL_ID) if settings.MEDIA_REQUEST_CHANNEL_ID else interaction.channel
-        message = await channel.send(embed=build_request_embed(request_row), view=build_status_view(request_id, "pending"))
+        message = await channel.send(embed=build_request_embed(request_row), view=build_status_view(request_row))
         await self.bot.db.set_media_request_message(request_id, channel.id, message.id)
 
         await interaction.followup.send(embed=success_embed("Request Submitted", f"Your request for **{result.title}** has been sent for review."))
@@ -321,11 +628,19 @@ class Media(commands.Cog):
                 embed=error_embed("Not Allowed", "Only the requester or staff can cancel this."), ephemeral=True
             )
             return
-        if request["status"] in {"completed", "denied", "cancelled"}:
+        if request["status"] in TERMINAL_STATUSES:
             await interaction.response.send_message(
                 embed=error_embed("Already Final", f"This request is already **{STATUS_LABELS.get(request['status'])}**."), ephemeral=True
             )
             return
+
+        if request["vrms_job_id"]:
+            try:
+                client = VRMSAPIClient.from_settings()
+                await client.cancel_job(request["vrms_job_id"])
+            except VRMSAPIError as exc:
+                logger.warning("Failed to cancel VRMS job for media request #%s: %s", request_id, exc)
+            await self.bot.db.clear_media_request_gate_message(request_id)
 
         await self.bot.db.update_media_request_status(request_id, "cancelled", reviewer_id=interaction.user.id)
         updated = await self.bot.db.get_media_request(request_id)

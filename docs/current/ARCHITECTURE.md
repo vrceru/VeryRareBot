@@ -18,16 +18,18 @@ core/
   version.py              Reads VERSION.
 
 services/               Everything that isn't Discord-specific: I/O, business logic, external APIs.
-  database.py            Single shared aiosqlite connection (warnings, playlists, tickets).
+  database.py            Single shared aiosqlite connection (warnings, playlists, tickets, media
+                         requests, tempvoice, ...).
   jellyfin.py             Read-only Jellyfin API client.
   system.py                Host stats via psutil (for /serverinfo).
-  vrms.py                  Narrow systemd wrapper, restricted to one allow-listed unit name.
+  vrms.py                  Narrow systemd wrapper, restricted to one allow-listed unit name --
+                           distinct from vrms_api.py below.
+  vrms_api.py               HTTP client for VRMS's own job-queue/approval API (enqueue, poll,
+                            approve/deny its two gates). See VRMS_INTEGRATION.md.
   tickets.py               Ticket category registry (see "Extending" below).
   tmdb.py                    Read-only TMDB client (search + details) for media request cards.
-  welcome_card.py             Pillow image compositing: a member's avatar onto assets/welcome_card.png.
-
-assets/welcome_card.png  The "VRS" template graphic (transparent PNG); avatars are composited onto
-                        a copy of this at join time, not modified in place.
+  welcome_card.py             Pillow image compositing: a member's avatar onto assets/welcome_card.png
+                              (the template lives there, never modified in place).
   music/
     base.py                Track dataclass, MusicProviderError, MusicProvider protocol.
     queue.py                GuildQueue: loop/shuffle/volume/queue state. No Discord imports —
@@ -83,22 +85,20 @@ tests/                   unittest, run with `python -m unittest discover -s test
 5. If nothing is currently playing, `GuildPlayer.play_next()` calls `provider.stream_url(track)` to lazily resolve a short-lived direct audio URL, then hands it to `discord.FFmpegPCMAudio`.
 6. When ffmpeg finishes, discord.py's `after=` callback (running on a worker thread) hands control back to the event loop via `asyncio.run_coroutine_threadsafe`, which re-enters `play_next()` for the next track.
 
-## Media requests and the VRMS integration seam
+## Media requests and the VRMS API
 
-`cogs/media.py` (`/media request`, `/media queue`, `/media myrequests`, `/media cancel`) is a request/approval/queue system for the Very Rare Media Service, built ahead of VRMS having any API to integrate with. It's entirely self-contained today:
+`cogs/media.py` (`/media request`, `/media queue`, `/media myrequests`, `/media cancel`) is a request/approval/queue system for the Very Rare Media Service. `services/tmdb.py` supplies search, metadata, and poster art for the request itself; `services/database.py`'s `media_requests` table is the source of truth for bot-side status: `pending → approved → downloading → completed`, with `denied`/`on_hold`/`cancelled`/`failed` as side branches (`TRANSITIONS` in `cogs/media.py` has the exact staff-driven state graph).
 
-- `services/tmdb.py` supplies search, metadata, and poster art (title, year, overview, poster) — this is the only external API involved, and it's read-only.
-- `services/database.py`'s `media_requests` table is the source of truth for status: `pending → approved → downloading → completed`, with `denied`/`on_hold`/`cancelled` as side branches. See `TRANSITIONS` in `cogs/media.py` for the exact allowed state graph.
-- Every status change today happens because a staff member clicked a button on the request card (`apply_media_action()` in `cogs/media.py`). There is no code anywhere that talks to VRMS itself — the `downloading` and `completed` states are just labels staff set by hand once VRMS is actually fetching something.
+**With `VRMS_API_URL` configured**, approving a request also calls `services/vrms_api.py` (`VRMSAPIClient`, matching `tmdb.py`'s `from_settings()`/one-error-class shape) to actually start the job in VRMS, storing its id on `media_requests.vrms_job_id`. From there, `Media.vrms_job_watch` — a `@tasks.loop` on the `Media` cog itself, same pattern as `cogs/notifications.py`'s polling — checks in on every request with an attached job:
 
-**A real VRMS API exists now** (it didn't when this section was first written) — see
-[VRMS_INTEGRATION.md](VRMS_INTEGRATION.md) for the concrete field mapping, endpoint reference,
-and a recommended implementation plan for wiring `apply_media_action()`, a new `services/vrms.py`
-(or `services/vrms_api.py`) HTTP client, and a `cogs/notifications.py`-style polling loop to
-surface VRMS's own two admin-approval gates in Discord.
+- VRMS reaching `completed`/`failed`/`cancelled` updates the bot's own status and DMs the requester automatically — no manual "Mark Completed" click needed for the happy path.
+- VRMS pausing at one of its own two admin-approval gates (`awaiting_release_approval`, `awaiting_final_approval`) posts a *separate* gate card in the same channel, with its own Approve/Deny buttons (`VRMSGateButton`, a second `DynamicItem` with the distinct `vrms_gate:(?P<gate>release|final):(?P<action>approve|deny):(?P<request_id>\d+)` template so it can't collide with `MediaActionButton`'s `media:...` one). Denying at a gate cancels the whole request.
 
-Nothing on the Discord-facing side (the cards, the queue browser, `/media myrequests`) needs to
-change beyond that — they render whatever's in `media_requests`, however it got there.
+**Without `VRMS_API_URL`**, none of the above runs — `apply_media_action()`'s VRMS call is skipped silently (not an error), and the original manual "Mark Downloading"/"Mark Completed" buttons stay available on the request card exactly as before. `build_status_view()` decides which buttons to show based on whether `vrms_job_id` is set, not a separate config check.
+
+Full field mapping (this bot's `tmdb_id`/`"movie"`·`"tv"` vocabulary vs. VRMS's `metadataId`/`"movie"`·`"show"`·`"anime"`·`"music"`) and the complete endpoint reference live in [VRMS_INTEGRATION.md](VRMS_INTEGRATION.md).
+
+One real gotcha worth knowing if you touch `services/vrms_api.py`: VRMS's Fastify server rejects a POST with `Content-Type: application/json` and a genuinely empty body ("Body cannot be empty..."), *and* rejects one with no `Content-Type`/body at all ("Unsupported Media Type") — a bodyless action (cancel, deny-release, approve-final, ...) has to send an actual `{}`, which `_request()` does automatically whenever `json` isn't provided on a non-GET call. Found by testing live against a local VRMS dev instance, not by reading its source.
 
 ## Extending
 

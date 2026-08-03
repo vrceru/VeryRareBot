@@ -1,11 +1,17 @@
 # Wiring `cogs/media.py` into the real VRMS API
 
-Written for whichever session picks this up next — read this before touching `cogs/media.py`,
-`services/vrms.py`, or `cogs/notifications.py`. It replaces the "there's no VRMS API yet" premise
-`docs/current/ARCHITECTURE.md#media-requests-and-the-vrms-integration-seam` was written under —
-a real one now exists. That section is still worth reading first for the *existing* design
-(`media_requests` table, `TRANSITIONS`, the `MediaActionButton` dynamic-item pattern) since
-everything below builds on it rather than replacing it.
+**Status: implemented.** The recommended design below (collapse `approve` into starting the VRMS
+job, a polling loop, `VRMSGateButton` for the two gates) is what's actually built in
+`cogs/media.py` / `services/vrms_api.py` / `services/database.py` today — this doc is now the
+reference for *how* it works and *why*, not a plan for someone else to execute. See
+`docs/current/ARCHITECTURE.md#media-requests-and-the-vrms-api` for the short version and a real
+gotcha found while building this (Fastify's empty-body handling — also noted below, in "New
+pieces to build").
+
+Original context, still accurate: this replaces the "there's no VRMS API yet" premise
+`docs/current/ARCHITECTURE.md` was written under before a real one existed. The `media_requests`
+table, `TRANSITIONS`, and the `MediaActionButton` dynamic-item pattern described there are the
+foundation everything below builds on.
 
 ## What VRMS is, right now
 
@@ -127,25 +133,33 @@ a first pass):
      `metadata`, plus its `storage.hasEnoughSpace` (warn visibly if `false` — VRMS won't
      auto-block, it's just information). Approve/Deny call `approve-final`/`deny-final`.
 
-## New pieces to build
+## New pieces built
 
-- **`services/vrms.py`** (or split into a new `services/vrms_api.py` if you'd rather keep the
-  systemd wrapper and the HTTP client separate — `services/vrms.py` today is *only*
-  `systemctl`-facing, so a new file is probably cleaner): an `aiohttp`-based client, same shape
-  as `services/tmdb.py` — one class, `from_settings()` classmethod, methods for
-  `enqueue(title, media_type, year, metadata_id) -> job dict`, `get_job(job_id) -> dict`,
-  `list_release_approvals()`, `approve_release(job_id, candidate_id=None)`,
-  `deny_release(job_id)`, `list_final_approvals()`, `approve_final(job_id)`, `deny_final(job_id)`.
-  Raise a `VRMSAPIError` (distinct from the existing `VRMSError` used for the systemd wrapper,
-  or reuse it — your call) on non-2xx responses, same "user-safe error" convention as
-  `TMDBError`/`JellyfinError`.
-- **`services/database.py`**: a migration (via the existing `_MIGRATIONS` list, per
-  `ARCHITECTURE.md`'s note on additive migrations — `media_requests` already shipped, so this
-  needs `ALTER TABLE`, not just editing `_SCHEMA`) adding `vrms_job_id TEXT` to `media_requests`,
-  plus a getter/setter pair matching the existing `set_media_request_message` style.
-- **`config/settings.py`**: `VRMS_API_URL`, `VRMS_API_KEY` (plain `os.getenv`, matching
-  `JELLYFIN_URL`/`TMDB_API_KEY`'s style — no special validation needed beyond what
-  `services/vrms.py`'s `from_settings()` already does for TMDB).
+- **`services/vrms_api.py`** (kept separate from `services/vrms.py`, which stays purely
+  `systemctl`-facing): `aiohttp`-based `VRMSAPIClient`, same shape as `services/tmdb.py` — one
+  class, `from_settings()` classmethod, methods for `enqueue`, `get_job`, `cancel_job`,
+  `list_release_approvals`, `approve_release(job_id, candidate_id=None)`, `deny_release`,
+  `list_final_approvals`, `approve_final`, `deny_final`. Raises `VRMSAPIError` (a distinct class
+  from the systemd wrapper's `VRMSError`) on non-2xx responses.
+
+  **Gotcha found by testing live against a local VRMS dev instance** (not visible from reading
+  the route source): Fastify rejects a POST with `Content-Type: application/json` and a *truly
+  empty* body (`FST_ERR_CTP_EMPTY_JSON_BODY`, "Body cannot be empty..."), and *also* rejects one
+  sent with no `Content-Type`/body at all (`FST_ERR_CTP_INVALID_MEDIA_TYPE`, "Unsupported Media
+  Type"). A bodyless action — `cancel`, `deny-release`, `approve-final`, `deny-final`, or
+  `approve-release` with no `candidateId` — needs an actual `{}` sent as the JSON body.
+  `VRMSAPIClient._request()` handles this by defaulting `json` to `{}` whenever it's `None` on a
+  non-GET call, and lets `aiohttp` set `Content-Type` only when there's an actual body (the
+  client's `_headers()` never hardcodes it). If you're modifying this client, don't reintroduce a
+  hardcoded `Content-Type` header or pass `json=None` through to `aiohttp` unchanged on a POST —
+  either one reintroduces this bug.
+- **`services/database.py`**: `vrms_job_id TEXT`, `vrms_gate_channel_id INTEGER`,
+  `vrms_gate_message_id INTEGER` on `media_requests`, added via the additive-migration mechanism
+  (`_MIGRATIONS`, since `media_requests` already shipped before these columns existed) — plus
+  getter/setters matching the existing `set_media_request_message` style, and
+  `list_media_requests_with_vrms_job()` for the polling loop.
+- **`config/settings.py`**: `VRMS_API_URL`, `VRMS_API_KEY`, `VRMS_JOB_POLL_SECONDS` (plain
+  `os.getenv`/`env_int`, matching `JELLYFIN_URL`/`TMDB_API_KEY`'s style).
 - **`.env.example`**: document the two new vars.
 
 ## Testing without real downloads

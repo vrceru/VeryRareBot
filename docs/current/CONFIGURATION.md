@@ -84,4 +84,12 @@ Ticket categories themselves (labels, form fields, colors) are defined in code a
 | `TMDB_API_KEY` | unset | Free key from [themoviedb.org](https://www.themoviedb.org/settings/api). Required for `/media request` and its title autocomplete; without it, `/media request` returns a clear "not configured" error rather than failing oddly. |
 | `MEDIA_REQUEST_CHANNEL_ID` | unset | Where request cards get posted for staff review. Falls back to whatever channel `/media request` was run in if unset. |
 
-There's no VRMS API to configure yet — `/media queue`'s downloading/completed states are set by staff clicking buttons on the request card, not synced automatically. See [ARCHITECTURE.md](ARCHITECTURE.md) for how that's expected to connect once VRMS has one.
+### VRMS API (media pipeline)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `VRMS_API_URL` | unset | Base URL of a running VeryRareMediaService instance, e.g. `http://localhost:8787`. Leave unset to keep media requests fully staff-managed (the original "Mark Downloading"/"Mark Completed" buttons) — nothing breaks, VRMS integration just stays off. |
+| `VRMS_API_KEY` | unset | Only needed if VRMS's own `API_KEY` env var is set on its side; sent as `Authorization: Bearer <key>`. |
+| `VRMS_JOB_POLL_SECONDS` | `30` | How often the bot checks in on jobs it started in VRMS. Floored at 15s regardless of a lower value. |
+
+This is distinct from `VRMS_SERVICE_NAME`/`VRMS_PATH` above, which only control a systemd unit — see [VRMS_INTEGRATION.md](VRMS_INTEGRATION.md) for the full design (field mapping, endpoint reference, how approval gates surface in Discord).

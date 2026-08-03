@@ -57,7 +57,12 @@ Media requests:
 - `/media request <title> [notes]` — request a movie or TV show. Start typing and pick a suggestion (needs `TMDB_API_KEY`); posts a review card with a poster, overview, and Approve/Deny/Hold buttons to `MEDIA_REQUEST_CHANNEL_ID` (or the current channel if unset).
 - `/media queue [status]` — browse the request queue one card at a time. Defaults to active requests (pending, on hold, approved, downloading); pass a specific status to see history too.
 - `/media myrequests` — a compact list of your own requests and their status.
-- `/media cancel <request_id>` — cancel your own request (or, for staff, anyone's), unless it's already completed/denied/cancelled.
+- `/media cancel <request_id>` — cancel your own request (or, for staff, anyone's), unless it's already completed/denied/cancelled/failed. If a VRMS job is attached, this also cancels it in VRMS.
+
+**With `VRMS_API_URL` configured**, clicking Approve also starts the request as a VRMS job — no separate "Mark Downloading" click needed (that button only reappears as a manual fallback if VRMS isn't configured or the enqueue call fails). From there:
+- A background poll picks up VRMS's status automatically: the card moves to Downloading once VRMS actually starts working, and to Completed or Failed when the job finishes — no further clicks needed for the happy path.
+- If VRMS pauses at one of its own two approval gates (release selection, then a final check before it's filed into the library), a separate gate card appears with its own Approve/Deny buttons showing what VRMS found (release quality/seeders, or the matched title/poster and a storage check). Denying at a gate cancels the whole request.
+- Without `VRMS_API_URL` set, nothing here changes — Approve/Mark Downloading/Mark Completed work exactly as before, fully staff-driven.
 
 TempVoice (join-to-create voice channels, replaces the third-party TempVoice bot):
 

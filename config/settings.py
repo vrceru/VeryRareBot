@@ -90,6 +90,10 @@ TICKET_MAX_OPEN_PER_USER = env_int("TICKET_MAX_OPEN_PER_USER", 3)
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
 MEDIA_REQUEST_CHANNEL_ID = env_int("MEDIA_REQUEST_CHANNEL_ID")
 
+VRMS_API_URL = os.getenv("VRMS_API_URL", "").strip()
+VRMS_API_KEY = os.getenv("VRMS_API_KEY", "").strip()
+VRMS_JOB_POLL_SECONDS = env_int("VRMS_JOB_POLL_SECONDS", 30)
+
 
 def validate() -> list[str]:
     """Return configuration problems that should prevent the bot from starting."""

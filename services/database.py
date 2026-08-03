@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS tempvoice_channels (
 # "CREATE TABLE IF NOT EXISTS" above is a no-op against an already-existing table.
 _MIGRATIONS = (
     ("tempvoice_channels", "panel_message_id", "INTEGER"),
+    ("media_requests", "vrms_job_id", "TEXT"),
+    ("media_requests", "vrms_gate_channel_id", "INTEGER"),
+    ("media_requests", "vrms_gate_message_id", "INTEGER"),
 )
 
 ACTIVE_MEDIA_STATUSES = ("pending", "on_hold", "approved", "downloading")
@@ -308,6 +311,36 @@ class Database:
         await self.conn.execute(
             "UPDATE media_requests SET card_channel_id = ?, card_message_id = ? WHERE id = ?",
             (channel_id, message_id, request_id),
+        )
+        await self.conn.commit()
+
+    async def set_media_request_vrms_job(self, request_id: int, job_id: str) -> None:
+        await self.conn.execute(
+            "UPDATE media_requests SET vrms_job_id = ? WHERE id = ?",
+            (job_id, request_id),
+        )
+        await self.conn.commit()
+
+    async def list_media_requests_with_vrms_job(self) -> list[aiosqlite.Row]:
+        """All requests with an attached VRMS job that hasn't reached a terminal bot-side status --
+        what the VRMS job-polling loop needs to check on each tick."""
+        cursor = await self.conn.execute(
+            "SELECT * FROM media_requests WHERE vrms_job_id IS NOT NULL "
+            "AND status NOT IN ('completed', 'denied', 'cancelled', 'failed')"
+        )
+        return list(await cursor.fetchall())
+
+    async def set_media_request_gate_message(self, request_id: int, channel_id: int, message_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE media_requests SET vrms_gate_channel_id = ?, vrms_gate_message_id = ? WHERE id = ?",
+            (channel_id, message_id, request_id),
+        )
+        await self.conn.commit()
+
+    async def clear_media_request_gate_message(self, request_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE media_requests SET vrms_gate_channel_id = NULL, vrms_gate_message_id = NULL WHERE id = ?",
+            (request_id,),
         )
         await self.conn.commit()
 
