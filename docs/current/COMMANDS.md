@@ -1,33 +1,49 @@
 # VeryRareBot commands
 
+All commands are Discord slash commands. Command groups (`/jellyfin`, `/music`, `/music playlist`, `/vrms`, `/ticket`) aren't invoked directly — Discord shows their subcommands.
+
 ## Everyone
+
+General:
 
 - `/ping` — bot latency
 - `/version` — installed bot version
 - `/uptime` — current process uptime
 - `/about` — bot summary
-- `/whoami` — detected VeryRareBot permission roles
-- `/avatar [member]` — a member's avatar
+- `/whoami` — your detected VeryRareBot permission roles
+- `/avatar [member]` — a member's avatar (defaults to you)
 - `/userinfo [member]` — account/server info for a member
-- `/botstats` — runtime stats: latency, uptime, servers, members, CPU/memory
+- `/botstats` — runtime stats: version, latency, uptime, servers, members, CPU/memory, discord.py version
 - `/invite` — OAuth2 link to add the bot to another server
-- `/jellyfin status` — Jellyfin server name and version
+
+Jellyfin:
+
+- `/jellyfin status` — server name, version, OS
 - `/jellyfin nowplaying` — active playback sessions
 - `/jellyfin libraries` — libraries visible to `JELLYFIN_USER_ID`
 - `/jellyfin search <query>` — search movies, shows, episodes, and audio
-- `/music play <query> [source]` — search or queue a URL from YouTube, SoundCloud, or VeryRare media (Jellyfin); auto-detects the source unless one is given
+
+Music (open to any member — no separate DJ role):
+
+- `/music play <query> [source]` — search or queue a URL from YouTube, SoundCloud, or VeryRare media (Jellyfin); auto-detects the source from the query unless `source` is given
 - `/music search <query> [source]` — preview results without queueing
-- `/music pause`, `/music resume`, `/music stop`, `/music skip`
-- `/music queue` — show what's playing and up next
-- `/music remove <position>` — remove a queued track
+- `/music pause` / `/music resume` / `/music stop` / `/music skip`
+- `/music queue` — what's playing and what's up next
+- `/music remove <position>` — remove a track from the queue by its `/music queue` position
 - `/music shuffle` — shuffle the upcoming queue
 - `/music loop <off|track|queue>`
 - `/music volume <0-200>`
 - `/music nowplaying`
-- `/music join`, `/music leave`
-- `/music playlist save <name>` / `load <name>` / `list` / `delete <name>` — personal saved playlists
-- `/ticket open <category>` — open a support ticket (VeryRare Media sign-up, bug report, forgot password, moderation appeal, or other); opens a form, then creates a private ticket channel
-- `/ticket close` — close the current ticket (opener or staff)
+- `/music join` / `/music leave`
+- `/music playlist save <name>` — save the current queue
+- `/music playlist load <name>` — queue a saved playlist
+- `/music playlist list` — list your saved playlists
+- `/music playlist delete <name>`
+
+Tickets:
+
+- `/ticket open <category>` — open a support ticket. Choosing a category opens a form; submitting it creates a private ticket channel. Categories: VeryRare Media Sign-Up, Bug Report, Forgot Password, Moderation Appeal, Other.
+- `/ticket close` — close the current ticket (usable by the ticket's opener or staff). Also available as a button in the ticket channel.
 
 ## Admin
 
@@ -36,27 +52,29 @@
 - `/warn <member> <reason>` — record a warning, post it, and attempt to DM the member
 - `/warnings <member>` — view a member's warning history
 - `/clearwarnings <member>` — clear a member's warning history
-- `/mute <member> <minutes> <reason>` — Discord timeout from 1 minute to 28 days
+- `/mute <member> <minutes> <reason>` — Discord timeout, 1 minute to 28 days
 - `/kick <member> [reason]`
 - `/ban <member> [reason] [delete_message_days]`
 - `/slowmode <seconds>` — 0 disables it, max 21600 (6 hours)
-- `/lock`, `/unlock` — toggle `@everyone` send permission on the current channel
+- `/lock` / `/unlock` — toggle `@everyone`'s send permission on the current channel
 - `/clear <amount>` — delete 1–100 recent messages
-- `/ticket panel [message]` — post a persistent category-picker panel for members to self-serve ticket creation
+- `/ticket panel [message]` — post a persistent category-picker panel so members can self-serve ticket creation
 
-All moderation commands that target a member (`warn`, `mute`, `kick`, `ban`) reject the action if the target is the server owner, the bot, yourself, or has a role at or above your own (or the bot's).
+Moderation commands that target a member (`warn`, `mute`, `kick`, `ban`) refuse to act if the target is the server owner, the bot, yourself, or has a role at or above your own (or the bot's own) highest role.
 
 ## DevOps
 
 - `/serverinfo` — hostname, OS, CPU, memory, disk, and uptime
 - `/vrms status` — configured project path and systemd status
-- `/vrms start`, `/vrms stop`, `/vrms restart` — operate `VRMS_SERVICE_NAME`
+- `/vrms start` / `/vrms stop` / `/vrms restart` — operate `VRMS_SERVICE_NAME`
 
-VRMS commands are deliberately unavailable until a service name is configured. All role-restricted commands reject users when the corresponding role IDs are unset.
+VRMS commands are unavailable until `VRMS_SERVICE_NAME` is configured. All role-restricted commands reject users when the corresponding role ID is unset — an unset role ID never grants access to anyone.
 
 ## Background behavior (no command)
 
-- **Logging** — member join/leave, role changes, message edits/deletes, voice channel activity, and command usage are logged to `LOG_CHANNEL_ID` (and the log file) when configured. Member joins also post a welcome message to `WELCOME_CHANNEL_ID`.
-- **Notifications** — polls Jellyfin for new library additions (posted to `JELLYFIN_NOTIFY_CHANNEL_ID`) and VRMS service state changes (posted to `VRMS_NOTIFY_CHANNEL_ID`). Both are disabled unless their channel ID is set.
-- Music auto-disconnects after `MUSIC_IDLE_DISCONNECT_SECONDS` of inactivity, or immediately if everyone leaves its voice channel.
-- **Tickets** — each ticket gets its own private channel (visible to the opener, `TICKET_STAFF_ROLE_ID`, and the bot) under `TICKET_CATEGORY_ID`. Sign-up and forgot-password tickets are informational only: staff still create the Jellyfin account or reset the password by hand — the bot does not touch Jellyfin credentials for this. Closing renames the channel to `closed-...` and revokes the opener's send access; deleting the channel is a separate, staff-only step. Users are capped at `TICKET_MAX_OPEN_PER_USER` simultaneous open tickets.
+- **Logging** — member joins/leaves, role changes, message edits/deletes, voice channel activity, and slash command usage are logged to `LOG_CHANNEL_ID` (and the log file) when configured. Member joins also post a welcome message to `WELCOME_CHANNEL_ID`. Unhandled command errors are also forwarded to `LOG_CHANNEL_ID`.
+- **Notifications** — polls Jellyfin for new library additions (`JELLYFIN_NOTIFY_CHANNEL_ID`) and VRMS service state changes (`VRMS_NOTIFY_CHANNEL_ID`). Each is disabled unless its channel ID is set. The first poll after startup only records a baseline — it doesn't replay pre-existing history.
+- **Music auto-disconnect** — leaves the voice channel after `MUSIC_IDLE_DISCONNECT_SECONDS` of inactivity, or immediately once every human leaves.
+- **Tickets** — each ticket gets a private channel under `TICKET_CATEGORY_ID`, visible to the opener, `TICKET_STAFF_ROLE_ID`, and the bot. Sign-up and forgot-password tickets are informational only: staff create the Jellyfin account or reset the password by hand. Closing a ticket revokes the opener's send access and renames the channel to `closed-...`; deleting the channel afterward is a separate, staff-only button. Users are capped at `TICKET_MAX_OPEN_PER_USER` simultaneous open tickets.
+
+See also: [CONFIGURATION.md](CONFIGURATION.md) for every setting referenced above, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.

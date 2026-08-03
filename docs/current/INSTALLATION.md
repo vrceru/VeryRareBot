@@ -1,5 +1,7 @@
 # Installation
 
+See [CONFIGURATION.md](CONFIGURATION.md) for what every `.env` variable below actually does, and [COMMANDS.md](COMMANDS.md) for the commands each feature unlocks.
+
 ## Native Linux deployment
 
 ```bash
@@ -17,6 +19,8 @@ Edit `.env` and set `DISCORD_TOKEN`. Configure role and channel IDs only for fea
 python bot.py
 ```
 
+Before starting the bot, enable the **Message Content** and **Server Members** privileged intents for your application in the [Discord Developer Portal](https://discord.com/developers/applications) (Bot page) — `bot.py` requests both, and Discord will reject the connection if they aren't turned on there.
+
 For VRMS controls, set `VRMS_SERVICE_NAME` to the unit name managed by systemd (for example, `vrms.service`). Give the bot's operating-system user only the narrowly scoped privilege required for that unit; do not run the bot as root.
 
 ### Music playback
@@ -31,7 +35,11 @@ No API keys are required for YouTube or SoundCloud (via `yt-dlp`); VeryRare medi
 
 ### Database
 
-Warnings and saved playlists are stored in a SQLite file, created automatically at `DATABASE_PATH` (defaults to `./data/verrarebot.sqlite3`). Back this file up if you care about warning history.
+Warnings, saved playlists, and tickets are stored in a SQLite file, created automatically at `DATABASE_PATH` (defaults to `./data/verrarebot.sqlite3`). Back this file up if you care about warning or ticket history.
+
+### Tickets
+
+No extra installation steps — the ticket system uses the same SQLite database. Set `TICKET_CATEGORY_ID` to a channel category if you want ticket channels grouped somewhere specific, and `TICKET_STAFF_ROLE_ID` if ticket staff shouldn't just be `STAFF_ROLE_ID`. Then run `/ticket panel` once in whichever channel members should use to open tickets — it posts a persistent picker that keeps working across restarts.
 
 ## Docker deployment
 

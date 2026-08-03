@@ -1,6 +1,6 @@
 # VeryRareBot
 
-VeryRareBot is the Discord assistant for the Very Rare Society. It provides server utilities, moderation, activity logging, music playback, host monitoring, Jellyfin discovery/notifications, and permission-gated VRMS service controls.
+VeryRareBot is the Discord assistant for the Very Rare Society. It provides server utilities, moderation, activity logging, music playback, a support ticket system, host monitoring, Jellyfin discovery/notifications, and permission-gated VRMS service controls.
 
 ## Features
 
@@ -8,11 +8,12 @@ VeryRareBot is the Discord assistant for the Very Rare Society. It provides serv
 - Moderation: `/announce`, `/maintenance`, `/warn`, `/warnings`, `/clearwarnings`, `/mute`, `/kick`, `/ban`, `/slowmode`, `/lock`, `/unlock`, `/clear`
 - Logging: member joins/leaves, role changes, message edits/deletes, voice activity, and command usage, to a configured log channel
 - Music: `/music play|search|pause|resume|stop|skip|queue|remove|shuffle|loop|volume|nowplaying|join|leave` plus `/music playlist save|load|list|delete`, sourced from YouTube, SoundCloud, or the Society's own Jellyfin library ("VeryRare media")
+- Tickets: `/ticket open` (VeryRare Media sign-up, bug report, forgot password, moderation appeal, other) and `/ticket panel` for a self-serve picker; each ticket gets a private channel for staff to follow up in
 - Host health: `/serverinfo`
 - Jellyfin: `/jellyfin status`, `/jellyfin nowplaying`, `/jellyfin libraries`, `/jellyfin search`, plus background notifications for new library additions
 - VRMS: `/vrms status`, `/vrms start`, `/vrms stop`, `/vrms restart`, plus background outage/recovery notifications
 
-Full command reference: [docs/current/COMMANDS.md](docs/current/COMMANDS.md).
+Docs: [Commands](docs/current/COMMANDS.md) · [Configuration](docs/current/CONFIGURATION.md) · [Installation](docs/current/INSTALLATION.md) · [Architecture](docs/current/ARCHITECTURE.md) · [Development guide](docs/current/DEVELOPMENT.md)
 
 ## Setup
 
@@ -31,15 +32,17 @@ Full command reference: [docs/current/COMMANDS.md](docs/current/COMMANDS.md).
 
 Set `GUILD_ID` during development to make command updates appear immediately in that server. Leave it blank for global command sync in production.
 
-Warnings and saved music playlists persist to a local SQLite database at `DATABASE_PATH` (defaults to `./data/verrarebot.sqlite3`).
+Warnings, saved music playlists, and tickets persist to a local SQLite database at `DATABASE_PATH` (defaults to `./data/verrarebot.sqlite3`). Every environment variable is documented in [docs/current/CONFIGURATION.md](docs/current/CONFIGURATION.md).
 
 ## Permissions
 
-Commands use Discord role IDs. Owner has all bot-level roles; DevOps can use host and VRMS commands; Admin can use moderation commands; Staff and VRS Member roles are used by `/whoami` and ready for future restricted features. Unset role IDs never grant access. Member-targeting moderation commands additionally refuse to act on the server owner, the bot, the invoker themselves, or anyone with a role at or above the invoker's (or the bot's own) highest role.
+Commands use Discord role IDs. Owner has all bot-level roles; DevOps can use host and VRMS commands; Admin can use moderation commands and post the ticket panel; Staff and VRS Member roles are used by `/whoami` and ready for future restricted features. Unset role IDs never grant access. Member-targeting moderation commands additionally refuse to act on the server owner, the bot, the invoker themselves, or anyone with a role at or above the invoker's (or the bot's own) highest role.
 
-Music and general/utility commands are open to any server member; there is no separate DJ role.
+Music, general/utility, and ticket-opening commands are open to any server member; there is no separate DJ role. Closing/deleting a ticket is allowed for its opener (close only) or `TICKET_STAFF_ROLE_ID`/Owner/DevOps/Admin.
 
 VRMS actions invoke only `systemctl` against the exact `VRMS_SERVICE_NAME` specified in `.env`; they are unavailable unless that name is configured. The system account running the bot must have the appropriate systemd permission.
+
+Sign-up and forgot-password tickets are informational only — the bot never creates Jellyfin accounts or resets passwords itself; staff handle that through Jellyfin directly.
 
 ## Docker
 
@@ -57,3 +60,5 @@ The image installs `ffmpeg`/`libopus0` for music and mounts `./data` for the SQL
 python -m compileall bot.py cogs config core services views
 python -m unittest discover -s tests
 ```
+
+See [docs/current/DEVELOPMENT.md](docs/current/DEVELOPMENT.md) for the project layout and guides to adding a command, a music provider, or a ticket category, and [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) for how the pieces fit together.
