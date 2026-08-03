@@ -25,7 +25,8 @@ Jellyfin:
 
 Music (open to any member — no separate DJ role):
 
-- `/music play <query> [source]` — search or queue a URL from YouTube, SoundCloud, or VeryRare media (Jellyfin); auto-detects the source from the query unless `source` is given
+- `/music join` — connect the bot to your voice channel. **Required first step** — `/music play` and `/music playlist load` won't auto-connect; they'll tell you to run this first if the bot isn't already in your channel.
+- `/music play <query> [source]` — search or queue a URL from YouTube, SoundCloud, or VeryRare media (Jellyfin); auto-detects the source from the query unless `source` is given. Requires the bot to already be connected via `/music join`.
 - `/music search <query> [source]` — preview results without queueing
 - `/music pause` / `/music resume` / `/music stop` / `/music skip`
 - `/music queue` — what's playing and what's up next
@@ -34,9 +35,9 @@ Music (open to any member — no separate DJ role):
 - `/music loop <off|track|queue>`
 - `/music volume <0-200>`
 - `/music nowplaying`
-- `/music join` / `/music leave`
+- `/music leave`
 - `/music playlist save <name>` — save the current queue
-- `/music playlist load <name>` — queue a saved playlist
+- `/music playlist load <name>` — queue a saved playlist. Also requires `/music join` first.
 - `/music playlist list` — list your saved playlists
 - `/music playlist delete <name>`
 

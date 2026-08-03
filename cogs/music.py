@@ -55,8 +55,8 @@ class Music(commands.Cog):
         return None
 
     async def _ensure_voice(self, interaction: discord.Interaction) -> bool:
-        """Connect the bot to the user's voice channel if needed. Returns False and
-        replies with an error if that isn't possible."""
+        """Connect the bot to the user's voice channel if needed. Used only by /music join.
+        Returns False and replies with an error if that isn't possible."""
 
         channel = self._member_voice_channel(interaction)
         if channel is None:
@@ -76,6 +76,37 @@ class Music(commands.Cog):
 
         if not player.is_connected:
             await player.connect(channel)
+        player.text_channel = interaction.channel
+        return True
+
+    async def _require_connected_voice(self, interaction: discord.Interaction) -> bool:
+        """Require the bot to already be connected to the user's voice channel. Does NOT
+        auto-connect - points the user at /music join instead. Returns False and replies
+        with an error if not connected."""
+
+        channel = self._member_voice_channel(interaction)
+        if channel is None:
+            await interaction.response.send_message(
+                embed=error_embed("Join a Voice Channel", "You need to be in a voice channel first."),
+                ephemeral=True,
+            )
+            return False
+
+        player = self.players.peek(interaction.guild_id)
+        if player is None or not player.is_connected:
+            await interaction.response.send_message(
+                embed=error_embed("Not Connected", "I'm not in a voice channel yet — use `/music join` first."),
+                ephemeral=True,
+            )
+            return False
+
+        if player.voice_client.channel.id != channel.id:
+            await interaction.response.send_message(
+                embed=error_embed("Already Playing Elsewhere", f"I'm already active in {player.voice_client.channel.mention}."),
+                ephemeral=True,
+            )
+            return False
+
         player.text_channel = interaction.channel
         return True
 
@@ -102,7 +133,7 @@ class Music(commands.Cog):
     @app_commands.describe(query="Search terms or a YouTube/SoundCloud URL.", source="Where to look. Defaults to auto-detecting from the query.")
     @app_commands.choices(source=SOURCE_CHOICES)
     async def play(self, interaction: discord.Interaction, query: str, source: app_commands.Choice[str] | None = None):
-        if not await self._ensure_voice(interaction):
+        if not await self._require_connected_voice(interaction):
             return
 
         await interaction.response.defer(thinking=True)
@@ -284,7 +315,7 @@ class Music(commands.Cog):
     @playlist.command(name="load", description="Queue a saved playlist.")
     @app_commands.describe(name="The playlist to load.")
     async def playlist_load(self, interaction: discord.Interaction, name: str):
-        if not await self._ensure_voice(interaction):
+        if not await self._require_connected_voice(interaction):
             return
         tracks = await self.bot.db.load_playlist(interaction.guild_id, interaction.user.id, name, interaction.user.id)
         if tracks is None:
