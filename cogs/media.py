@@ -339,16 +339,20 @@ def build_final_gate_embed(title: str, entry: dict) -> discord.Embed:
 
 
 def build_gate_view(
-    gate: str, request_id: int, candidates: list[dict] | None = None, auto_selected_id: str | None = None
+    gate: str,
+    request_id: int,
+    candidates: list[dict] | None = None,
+    auto_selected_id: str | None = None,
+    expected_year: int | None = None,
 ) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if gate == "release" and candidates and len(candidates) > 1:
         groups = _group_candidates_by_season(candidates)
         if len(groups) > 1:
-            view.add_item(SeasonPickerSelect(request_id, groups, auto_selected_id))
+            view.add_item(SeasonPickerSelect(request_id, groups, auto_selected_id, expected_year=expected_year))
         else:
             only_key = next(iter(groups))
-            view.add_item(ReleaseWithinSeasonSelect(request_id, groups[only_key], auto_selected_id))
+            view.add_item(ReleaseWithinSeasonSelect(request_id, groups[only_key], auto_selected_id, expected_year))
     view.add_item(VRMSGateButton(gate, "approve", request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅"))
     view.add_item(VRMSGateButton(gate, "deny", request_id, label="Deny", style=discord.ButtonStyle.danger, emoji="❌"))
     return view
@@ -461,12 +465,20 @@ def _season_option_label(season_key: int | None, count: int) -> str:
     return f"{name} ({count} release{'s' if count != 1 else ''})"
 
 
-def _within_season_option_text(candidate: dict) -> tuple[str, str]:
+def _within_season_option_text(candidate: dict, expected_year: int | None = None) -> tuple[str, str]:
     """Builds (label, description) for a release *within* an already-chosen season -- leads
     with quality info since season is no longer the thing being scanned for, and pushes the raw
-    (often long, noisy) release title down into the description as a secondary reference."""
+    (often long, noisy) release title down into the description as a secondary reference.
+
+    Always surfaces the release's own parsed year, and flags it with a warning when it doesn't
+    match what was actually requested: confirmed in production that a search for "The Maze
+    Runner" (2014) can return a completely different film in the same franchise (e.g. "...The
+    Death Cure" 2018) as a plausible-looking candidate, and with only quality info in the label
+    that mismatch was invisible until staff already approved it."""
     parsed = candidate.get("parsed") or {}
     bits = []
+    if parsed.get("year") is not None:
+        bits.append(str(parsed["year"]))
     if parsed.get("resolution"):
         bits.append(parsed["resolution"])
     if parsed.get("source"):
@@ -474,6 +486,11 @@ def _within_season_option_text(candidate: dict) -> tuple[str, str]:
     if candidate.get("seeders") is not None:
         bits.append(f"{candidate['seeders']} seeders")
     label = " • ".join(bits) if bits else "Release"
+
+    parsed_year = parsed.get("year")
+    if expected_year is not None and parsed_year is not None and int(parsed_year) != expected_year:
+        label = f"⚠️ {label} (expected {expected_year})"
+
     description = (candidate.get("title") or "Unknown")[:100]
     return label[:100], description
 
@@ -485,12 +502,12 @@ class ReleaseWithinSeasonSelect(discord.ui.Select):
     just means the dropdown goes dead, while the Approve/Deny buttons alongside it (which keep
     VRMS's own auto-pick) still work as the reliable fallback."""
 
-    def __init__(self, request_id: int, candidates: list[dict], auto_selected_id: str | None):
+    def __init__(self, request_id: int, candidates: list[dict], auto_selected_id: str | None, expected_year: int | None = None):
         self.request_id = request_id
         self.candidates = candidates[:25]
         options = []
         for i, candidate in enumerate(self.candidates):
-            label, description = _within_season_option_text(candidate)
+            label, description = _within_season_option_text(candidate, expected_year)
             options.append(
                 discord.SelectOption(
                     label=label,
@@ -518,10 +535,12 @@ class SeasonPickerSelect(discord.ui.Select):
         groups: dict[int | None, list[dict]],
         auto_selected_id: str | None,
         selected_key: int | None = None,
+        expected_year: int | None = None,
     ):
         self.request_id = request_id
         self.groups = groups
         self.auto_selected_id = auto_selected_id
+        self.expected_year = expected_year
         options = [
             discord.SelectOption(
                 label=_season_option_label(key, len(groups[key])),
@@ -535,8 +554,14 @@ class SeasonPickerSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         chosen_key = None if self.values[0] == "none" else int(self.values[0])
         view = discord.ui.View(timeout=None)
-        view.add_item(SeasonPickerSelect(self.request_id, self.groups, self.auto_selected_id, selected_key=chosen_key))
-        view.add_item(ReleaseWithinSeasonSelect(self.request_id, self.groups[chosen_key], self.auto_selected_id))
+        view.add_item(
+            SeasonPickerSelect(
+                self.request_id, self.groups, self.auto_selected_id, selected_key=chosen_key, expected_year=self.expected_year
+            )
+        )
+        view.add_item(
+            ReleaseWithinSeasonSelect(self.request_id, self.groups[chosen_key], self.auto_selected_id, self.expected_year)
+        )
         view.add_item(
             VRMSGateButton("release", "approve", self.request_id, label="Approve", style=discord.ButtonStyle.success, emoji="✅")
         )
@@ -686,9 +711,10 @@ class Media(commands.Cog):
             logger.debug("Failed to fetch VRMS %s gate detail for request #%s: %s", gate, row["id"], exc)
             return
 
+        expected_year = int(row["year"]) if row["year"] else None
         try:
             message = await channel.send(
-                embed=embed, view=build_gate_view(gate, row["id"], candidates, auto_selected_id)
+                embed=embed, view=build_gate_view(gate, row["id"], candidates, auto_selected_id, expected_year)
             )
         except discord.HTTPException:
             logger.warning("Failed to post the VRMS %s gate card for request #%s.", gate, row["id"])

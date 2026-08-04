@@ -242,6 +242,31 @@ class WithinSeasonOptionTextTests(unittest.TestCase):
         label, _ = _within_season_option_text({"title": "x", "parsed": {}})
         self.assertEqual(label, "Release")
 
+    def test_shows_parsed_year_when_present(self):
+        label, _ = _within_season_option_text(
+            {"title": "Movie.2014.1080p", "parsed": {"year": 2014, "resolution": "1080p"}}, expected_year=2014
+        )
+        self.assertEqual(label, "2014 • 1080p")
+
+    def test_flags_a_year_mismatch(self):
+        # Regression test: a "The Maze Runner" (2014) request approved via the picker actually
+        # downloaded "...The Death Cure" (2018) content -- same franchise, same rough title, only
+        # the year gave it away, and the label wasn't showing it at all at the time.
+        label, _ = _within_season_option_text(
+            {
+                "title": "Maze.Runner.The.Death.Cure.2018.1080p.BrRip",
+                "parsed": {"year": 2018, "resolution": "1080p"},
+            },
+            expected_year=2014,
+        )
+        self.assertTrue(label.startswith("⚠️"))
+        self.assertIn("2018", label)
+        self.assertIn("expected 2014", label)
+
+    def test_no_warning_when_expected_year_unknown(self):
+        label, _ = _within_season_option_text({"title": "x", "parsed": {"year": 2018}}, expected_year=None)
+        self.assertFalse(label.startswith("⚠️"))
+
 
 class VRMSGateEmbedTests(unittest.TestCase):
     def test_find_top_release_candidate_prefers_auto_selected(self):
