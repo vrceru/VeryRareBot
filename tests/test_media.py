@@ -6,14 +6,18 @@ from unittest.mock import patch
 from cogs.media import (
     STATUS_LABELS,
     TRANSITIONS,
+    EpisodePickerSelect,
     MediaActionButton,
     MediaPanelView,
     MediaRequestModal,
     ReleaseWithinSeasonSelect,
     SeasonPickerSelect,
     VRMSGateButton,
+    _episode_option_label,
     _find_top_release_candidate,
+    _group_candidates_by_episode,
     _group_candidates_by_season,
+    _ordered_episode_keys,
     _within_season_option_text,
     build_final_gate_embed,
     build_gate_view,
@@ -171,6 +175,18 @@ class VRMSGateButtonTemplateTests(unittest.TestCase):
         view = build_gate_view("release", 1, [], None)
         self.assertEqual(len(view.children), 2)
 
+    def test_release_gate_view_adds_episode_picker_for_a_single_episodic_season(self):
+        # A currently-airing show with only one season worth of candidates, but split up
+        # episode by episode (no full-season pack among them) -- there's nothing to disambiguate
+        # at the season level, but plenty at the episode level.
+        candidates = [
+            {"id": "e1", "title": "E1", "parsed": {"season": 2, "episode": 1}, "seeders": 10},
+            {"id": "e2", "title": "E2", "parsed": {"season": 2, "episode": 2}, "seeders": 10},
+        ]
+        view = build_gate_view("release", 1, candidates, "e1")
+        self.assertEqual(len(view.children), 3)
+        self.assertIsInstance(view.children[0], EpisodePickerSelect)
+
 
 class SeasonPickerSelectTests(unittest.TestCase):
     def test_lists_each_season_with_a_release_count(self):
@@ -202,6 +218,51 @@ class SeasonPickerSelectTests(unittest.TestCase):
         select = SeasonPickerSelect(1, groups, None)
         release_picker = ReleaseWithinSeasonSelect(1, groups[2], None)
         self.assertEqual([c["id"] for c in release_picker.candidates], ["s2"])
+
+
+class EpisodePickerSelectTests(unittest.TestCase):
+    def test_lists_full_season_option_first_then_episodes_ascending(self):
+        episode_groups = _group_candidates_by_episode(
+            [
+                {"id": "e2", "title": "E2", "parsed": {"season": 1, "episode": 2}},
+                {"id": "pack", "title": "Pack", "parsed": {"season": 1}},
+                {"id": "e1", "title": "E1", "parsed": {"season": 1, "episode": 1}},
+            ]
+        )
+        select = EpisodePickerSelect(1, {}, episode_groups, None, season_key=1)
+        labels = [opt.label for opt in select.options]
+        self.assertEqual(labels, ["📦 Full Season (Batch) (1 release)", "Episode 01 (1 release)", "Episode 02 (1 release)"])
+
+    def test_callback_scopes_the_release_picker_to_the_chosen_episode(self):
+        season_groups = _group_candidates_by_season(
+            [
+                {"id": "e1", "title": "E1", "parsed": {"season": 1, "episode": 1}, "seeders": 5},
+                {"id": "e2", "title": "E2", "parsed": {"season": 1, "episode": 2}, "seeders": 5},
+            ]
+        )
+        episode_groups = _group_candidates_by_episode(season_groups[1])
+        release_picker = ReleaseWithinSeasonSelect(1, episode_groups[2], None)
+        self.assertEqual([c["id"] for c in release_picker.candidates], ["e2"])
+
+
+class GroupCandidatesByEpisodeTests(unittest.TestCase):
+    def test_full_season_pack_grouped_under_none(self):
+        groups = _group_candidates_by_episode(
+            [
+                {"id": "pack", "title": "Pack", "parsed": {"season": 1}},
+                {"id": "e1", "title": "E1", "parsed": {"season": 1, "episode": 1}},
+            ]
+        )
+        self.assertEqual(set(groups.keys()), {None, 1})
+        self.assertEqual([c["id"] for c in groups[None]], ["pack"])
+
+    def test_ordered_keys_puts_full_season_first(self):
+        groups = {1: [], 2: [], None: []}
+        self.assertEqual(_ordered_episode_keys(groups), [None, 1, 2])
+
+    def test_episode_option_label_formatting(self):
+        self.assertEqual(_episode_option_label(5, 3), "Episode 05 (3 releases)")
+        self.assertEqual(_episode_option_label(None, 1), "📦 Full Season (Batch) (1 release)")
 
 
 class ReleaseWithinSeasonSelectTests(unittest.TestCase):
