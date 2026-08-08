@@ -13,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from config import settings
-from core.checks import has_any_role
+from core.checks import has_any_role, staff_access
 from core.embed import error_embed, make_embed, success_embed
 from services.tmdb import TMDBClient, TMDBError
 from services.vrms_api import VRMSAPIClient, VRMSAPIError
@@ -227,6 +227,60 @@ async def _start_vrms_job_if_configured(bot, request) -> tuple[dict, str | None]
     await bot.db.set_media_request_vrms_job(request["id"], job["id"])
     updated = await bot.db.get_media_request(request["id"])
     return updated, None
+
+
+async def submit_media_request(
+    bot, guild_id: int, user: discord.abc.User, title: str, notes: str | None, fallback_channel: discord.abc.Messageable | None
+) -> discord.Embed:
+    """Resolves a title via TMDB, creates the request, and posts its card. Returns the embed to
+    show the requester (success or a specific failure) -- shared by /media request and the
+    panel's modal so both entry points behave identically."""
+    try:
+        client = TMDBClient.from_settings()
+    except TMDBError as exc:
+        return error_embed("Media Requests Unavailable", str(exc))
+
+    match = re.fullmatch(r"(movie|tv):(\d+)", title)
+    try:
+        if match:
+            result = await client.get_details(match.group(1), int(match.group(2)))
+        else:
+            results = await client.search_multi(title, limit=1)
+            if not results:
+                return error_embed("Not Found", f"No results for **{title}**. Try again and pick a suggestion as you type.")
+            result = results[0]
+    except TMDBError as exc:
+        return error_embed("TMDB Error", str(exc))
+
+    existing = await bot.db.get_active_media_request(guild_id, result.tmdb_id, result.media_type)
+    if existing is not None:
+        return error_embed(
+            "Already Requested",
+            f"**{result.title}** is already requested (status: {STATUS_LABELS.get(existing['status'], existing['status'])})."
+        )
+
+    request_id = await bot.db.create_media_request(
+        guild_id,
+        user.id,
+        result.media_type,
+        result.tmdb_id,
+        result.title,
+        result.year,
+        result.poster_url,
+        result.overview,
+        notes,
+        is_anime=result.is_anime,
+    )
+    request_row = await bot.db.get_media_request(request_id)
+
+    channel = bot.get_channel(settings.MEDIA_REQUEST_CHANNEL_ID) if settings.MEDIA_REQUEST_CHANNEL_ID else fallback_channel
+    if channel is None:
+        return error_embed("Configuration Error", "No media request channel is configured and this channel isn't usable either.")
+    message = await channel.send(embed=build_request_embed(request_row), view=build_status_view(request_row))
+    await bot.db.set_media_request_message(request_id, channel.id, message.id)
+
+    logger.info("Media request #%s (%s:%s) opened by %s", request_id, result.media_type, result.tmdb_id, user)
+    return success_embed("Request Submitted", f"Your request for **{result.title}** has been sent for review.")
 
 
 async def apply_media_action(interaction: discord.Interaction, action: str, request_id: int) -> None:
@@ -571,6 +625,53 @@ class SeasonPickerSelect(discord.ui.Select):
         await interaction.response.edit_message(view=view)
 
 
+class MediaRequestModal(discord.ui.Modal):
+    """Free-text title entry for the panel button -- unlike the /media request slash command,
+    a modal has no autocomplete, so this always goes through submit_media_request's plain-title
+    search fallback (same path a slash-command user hits if they type a full title and never
+    pick a suggestion)."""
+
+    def __init__(self):
+        super().__init__(title="Request Media")
+        self.title_input = discord.ui.TextInput(label="Title", placeholder="e.g. The Matrix, or Attack on Titan", max_length=200)
+        self.notes_input = discord.ui.TextInput(
+            label="Anything staff should know?", style=discord.TextStyle.paragraph, required=False, max_length=500
+        )
+        self.add_item(self.title_input)
+        self.add_item(self.notes_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message(embed=error_embed("Server Only", "Media can only be requested in a server."), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        embed = await submit_media_request(
+            interaction.client, interaction.guild_id, interaction.user, self.title_input.value, self.notes_input.value or None, interaction.channel
+        )
+        await interaction.followup.send(embed=embed)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.exception("Media request modal failed", exc_info=error)
+        message = error_embed("Request Failed", "Something went wrong while submitting your request.")
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=message, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=message, ephemeral=True)
+
+
+class MediaPanelView(discord.ui.View):
+    """Persistent panel posted by /media panel -- lets members request a title without typing
+    the slash command."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Request Media", style=discord.ButtonStyle.success, emoji="🎬", custom_id="media:open_panel")
+    async def request_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MediaRequestModal())
+
+
 class QueueBrowserView(discord.ui.View):
     """Lets the invoker flip through queued requests one card at a time."""
 
@@ -610,6 +711,7 @@ class Media(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         bot.add_dynamic_items(MediaActionButton, VRMSGateButton)
+        bot.add_view(MediaPanelView())
 
         if settings.VRMS_API_URL:
             self.vrms_job_watch.change_interval(seconds=max(settings.VRMS_JOB_POLL_SECONDS, 15))
@@ -741,59 +843,20 @@ class Media(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+        embed = await submit_media_request(self.bot, interaction.guild_id, interaction.user, title, notes, interaction.channel)
+        await interaction.followup.send(embed=embed)
 
-        try:
-            client = TMDBClient.from_settings()
-        except TMDBError as exc:
-            await interaction.followup.send(embed=error_embed("Media Requests Unavailable", str(exc)))
-            return
-
-        match = re.fullmatch(r"(movie|tv):(\d+)", title)
-        try:
-            if match:
-                result = await client.get_details(match.group(1), int(match.group(2)))
-            else:
-                results = await client.search_multi(title, limit=1)
-                if not results:
-                    await interaction.followup.send(
-                        embed=error_embed("Not Found", f"No results for **{title}**. Try again and pick a suggestion as you type.")
-                    )
-                    return
-                result = results[0]
-        except TMDBError as exc:
-            await interaction.followup.send(embed=error_embed("TMDB Error", str(exc)))
-            return
-
-        existing = await self.bot.db.get_active_media_request(interaction.guild_id, result.tmdb_id, result.media_type)
-        if existing is not None:
-            await interaction.followup.send(
-                embed=error_embed(
-                    "Already Requested",
-                    f"**{result.title}** is already requested (status: {STATUS_LABELS.get(existing['status'], existing['status'])})."
-                )
-            )
-            return
-
-        request_id = await self.bot.db.create_media_request(
-            interaction.guild_id,
-            interaction.user.id,
-            result.media_type,
-            result.tmdb_id,
-            result.title,
-            result.year,
-            result.poster_url,
-            result.overview,
-            notes,
-            is_anime=result.is_anime,
-        )
-        request_row = await self.bot.db.get_media_request(request_id)
-
-        channel = self.bot.get_channel(settings.MEDIA_REQUEST_CHANNEL_ID) if settings.MEDIA_REQUEST_CHANNEL_ID else interaction.channel
-        message = await channel.send(embed=build_request_embed(request_row), view=build_status_view(request_row))
-        await self.bot.db.set_media_request_message(request_id, channel.id, message.id)
-
-        await interaction.followup.send(embed=success_embed("Request Submitted", f"Your request for **{result.title}** has been sent for review."))
-        logger.info("Media request #%s (%s:%s) opened by %s", request_id, result.media_type, result.tmdb_id, interaction.user)
+    @staff_access()
+    @media.command(name="panel", description="Post a media request panel members can use to request titles.")
+    @app_commands.describe(message="Optional message shown above the button.")
+    async def panel(
+        self,
+        interaction: discord.Interaction,
+        message: str = "Want something added to VeryRare Media? Click below to request it.",
+    ):
+        embed = make_embed("Request Media", message, color=discord.Color.blurple())
+        await interaction.channel.send(embed=embed, view=MediaPanelView())
+        await interaction.response.send_message(embed=success_embed("Panel Posted"), ephemeral=True)
 
     @request.autocomplete("title")
     async def title_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

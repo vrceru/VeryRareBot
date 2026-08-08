@@ -58,6 +58,7 @@ Media requests:
 - `/media queue [status]` — browse the request queue one card at a time. Defaults to active requests (pending, on hold, approved, downloading); pass a specific status to see history too.
 - `/media myrequests` — a compact list of your own requests and their status.
 - `/media cancel <request_id>` — cancel your own request (or, for staff, anyone's), unless it's already completed/denied/cancelled/failed. If a VRMS job is attached, this also cancels it in VRMS.
+- `/media panel [message]` — staff-only. Posts a persistent "Request Media" button; clicking it opens a modal (Title, optional Notes) that goes through the same request flow as `/media request`.
 
 **With `VRMS_API_URL` configured**, clicking Approve also starts the request as a VRMS job — no separate "Mark Downloading" click needed (that button only reappears as a manual fallback if VRMS isn't configured or the enqueue call fails). From there:
 - A background poll picks up VRMS's status automatically: the card moves to Downloading once VRMS actually starts working, and to Completed or Failed when the job finishes — no further clicks needed for the happy path.

@@ -7,6 +7,8 @@ from cogs.media import (
     STATUS_LABELS,
     TRANSITIONS,
     MediaActionButton,
+    MediaPanelView,
+    MediaRequestModal,
     ReleaseWithinSeasonSelect,
     SeasonPickerSelect,
     VRMSGateButton,
@@ -389,6 +391,21 @@ class MediaDatabaseTests(unittest.IsolatedAsyncioTestCase):
         request = await self.db.get_media_request(request_id)
         self.assertIsNone(request["vrms_gate_channel_id"])
         self.assertIsNone(request["vrms_gate_message_id"])
+
+
+class MediaPanelTests(unittest.TestCase):
+    def test_panel_view_has_one_persistent_button(self):
+        view = MediaPanelView()
+        self.assertEqual(len(view.children), 1)
+        button = view.children[0]
+        self.assertEqual(button.custom_id, "media:open_panel")
+        self.assertIsNone(view.timeout)
+
+    def test_modal_has_title_and_optional_notes_fields(self):
+        modal = MediaRequestModal()
+        self.assertEqual(len(modal.children), 2)
+        self.assertTrue(modal.title_input.required)
+        self.assertFalse(modal.notes_input.required)
 
 
 if __name__ == "__main__":
