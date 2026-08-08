@@ -36,10 +36,16 @@ TICKET_CATEGORIES: dict[str, TicketCategory] = {
         label="VeryRare Media Sign-Up",
         emoji="🎬",
         color=discord.Color.purple(),
-        intro="New VeryRare Media access request. Staff: create the Jellyfin account and reply here once it's ready.",
+        # No password field here on purpose: this posts into a staff-visible channel and stays
+        # in that channel's history indefinitely, which isn't a safe place to hold even a new
+        # account's password. Staff set one when creating the Jellyfin account and send it to
+        # the requester directly (DM), not through this ticket.
+        intro="New VeryRare Media access request. Staff: create the Jellyfin account, send the password directly to the requester (not in this channel), then reply here once it's ready.",
         fields=[
-            TicketField("Desired Username", max_length=32),
+            TicketField("Full Name", max_length=100),
             TicketField("Email Address", max_length=100),
+            TicketField("Desired Username", max_length=32),
+            TicketField("Age", max_length=3, placeholder="e.g. 25"),
             TicketField("Anything else we should know?", required=False, style=discord.TextStyle.paragraph),
         ],
     ),

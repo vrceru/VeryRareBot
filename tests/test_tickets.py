@@ -23,6 +23,17 @@ class TicketCategoryRegistryTests(unittest.TestCase):
         for category in TICKET_CATEGORIES.values():
             self.assertLessEqual(len(category.fields), 5, f"{category.key} exceeds Discord's 5-field modal limit")
 
+    def test_signup_collects_the_expected_fields(self):
+        labels = [f.label for f in TICKET_CATEGORIES["signup"].fields]
+        self.assertEqual(labels, ["Full Name", "Email Address", "Desired Username", "Age", "Anything else we should know?"])
+
+    def test_no_ticket_category_asks_for_a_password(self):
+        # Ticket submissions post into a staff-visible channel and stay in that channel's
+        # history indefinitely -- never a safe place to collect one, even a new account's.
+        for category in TICKET_CATEGORIES.values():
+            for f in category.fields:
+                self.assertNotIn("password", f.label.lower(), f"{category.key} field {f.label!r} looks like a password prompt")
+
 
 class TicketDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
