@@ -273,9 +273,13 @@ async def submit_media_request(
     )
     request_row = await bot.db.get_media_request(request_id)
 
-    channel = bot.get_channel(settings.MEDIA_REQUEST_CHANNEL_ID) if settings.MEDIA_REQUEST_CHANNEL_ID else fallback_channel
+    # The staff review card (with Approve/Deny/Hold) goes to the dedicated queue channel when
+    # configured -- deliberately not wherever the request came from, so a public request panel
+    # and a staff-only approval queue can be different channels.
+    queue_channel_id = settings.MEDIA_QUE_CHANNEL_ID or settings.MEDIA_REQUEST_CHANNEL_ID
+    channel = bot.get_channel(queue_channel_id) if queue_channel_id else fallback_channel
     if channel is None:
-        return error_embed("Configuration Error", "No media request channel is configured and this channel isn't usable either.")
+        return error_embed("Configuration Error", "No media queue channel is configured and this channel isn't usable either.")
     message = await channel.send(embed=build_request_embed(request_row), view=build_status_view(request_row))
     await bot.db.set_media_request_message(request_id, channel.id, message.id)
 

@@ -82,7 +82,8 @@ Ticket categories themselves (labels, form fields, colors) are defined in code a
 | Variable | Default | Notes |
 |---|---|---|
 | `TMDB_API_KEY` | unset | Free key from [themoviedb.org](https://www.themoviedb.org/settings/api). Required for `/media request` and its title autocomplete; without it, `/media request` returns a clear "not configured" error rather than failing oddly. |
-| `MEDIA_REQUEST_CHANNEL_ID` | unset | Where request cards get posted for staff review. Falls back to whatever channel `/media request` was run in if unset. |
+| `MEDIA_REQUEST_CHANNEL_ID` | unset | Legacy/fallback target for the staff review card if `MEDIA_QUE_CHANNEL_ID` isn't set. |
+| `MEDIA_QUE_CHANNEL_ID` | unset | Where the staff review card (Approve/Deny/Hold) gets posted -- typically a staff-only channel, separate from wherever `/media request` or the `/media panel` button was used. Falls back to `MEDIA_REQUEST_CHANNEL_ID`, then the invoking channel, if unset. |
 
 ### VRMS API (media pipeline)
 

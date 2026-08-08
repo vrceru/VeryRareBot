@@ -89,6 +89,10 @@ TICKET_MAX_OPEN_PER_USER = env_int("TICKET_MAX_OPEN_PER_USER", 3)
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
 MEDIA_REQUEST_CHANNEL_ID = env_int("MEDIA_REQUEST_CHANNEL_ID")
+# Where the staff review card (Approve/Deny/Hold) posts. Deliberately separate from
+# MEDIA_REQUEST_CHANNEL_ID so a public request panel and a staff-only approval queue can live in
+# different channels -- falls back to MEDIA_REQUEST_CHANNEL_ID, then the invoking channel, if unset.
+MEDIA_QUE_CHANNEL_ID = env_int("MEDIA_QUE_CHANNEL_ID")
 
 VRMS_API_URL = os.getenv("VRMS_API_URL", "").strip()
 VRMS_API_KEY = os.getenv("VRMS_API_KEY", "").strip()
