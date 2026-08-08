@@ -76,7 +76,7 @@ All of the above are also buttons (Lock/Unlock/Rename/Limit/Claim) on a live das
 
 ## Admin
 
-- `/announce <message>` — send an embed to `ANNOUNCEMENT_CHANNEL_ID`
+- `/announce <message> [title]` — send an embed to `ANNOUNCEMENT_CHANNEL_ID`. `title` defaults to "Official Announcement". `#`/`##` headers in `message` are auto-converted to bold text since Discord embeds don't render ATX headers.
 - `/maintenance <message> [starts_in_minutes]` — scheduled-maintenance notice to `ANNOUNCEMENT_CHANNEL_ID`
 - `/warn <member> <reason>` — record a warning, post it, and attempt to DM the member
 - `/warnings <member>` — view a member's warning history

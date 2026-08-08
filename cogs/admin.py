@@ -1,4 +1,5 @@
 import discord
+import re
 
 from datetime import timedelta
 
@@ -17,6 +18,17 @@ from core.embed import (
 from core.checks import admin_access, moderation_target_error
 
 
+_HEADER_LINE = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
+
+
+def _render_announcement_body(text: str) -> str:
+    """Discord embeds don't support Markdown ATX headers (# / ##) -- a pasted line starting
+    with one shows up as literal hash characters instead of a heading. Convert those lines to
+    bold text instead, which embeds do render, so a doc drafted with headers still looks right
+    once posted."""
+    return _HEADER_LINE.sub(lambda m: f"**{m.group(1)}**", text)
+
+
 class Admin(commands.Cog):
     """Administrative and moderation Discord commands."""
 
@@ -30,12 +42,14 @@ class Admin(commands.Cog):
         description="Send an official server announcement."
     )
     @app_commands.describe(
-        message="Announcement message."
+        message="Announcement message.",
+        title="Announcement title (optional, defaults to \"Official Announcement\")."
     )
     async def announce(
         self,
         interaction: discord.Interaction,
-        message: str
+        message: str,
+        title: str = "Official Announcement"
     ):
 
         channel = self.bot.get_channel(
@@ -56,8 +70,8 @@ class Admin(commands.Cog):
 
 
         embed = admin_embed(
-            "Official Announcement",
-            message
+            title,
+            _render_announcement_body(message)
         )
 
         embed.set_author(
