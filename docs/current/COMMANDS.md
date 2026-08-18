@@ -55,6 +55,7 @@ Tickets:
 Media requests:
 
 - `/media request <title> [notes]` — request a movie or TV show. Start typing and pick a suggestion (needs `TMDB_API_KEY`); posts a review card with a poster, overview, and Approve/Deny/Hold buttons to `MEDIA_REQUEST_CHANNEL_ID` (or the current channel if unset).
+- `/media album <title> [notes]` — request an album for VeryRare Media, distinct from `/music` (which only streams live, never downloads). Start typing an album or artist and pick a suggestion (backed by MusicBrainz, keyless); on approval this routes through VRMS the same way a movie/show does, matched against a real release with a real tracklist rather than a raw YouTube title.
 - `/media queue [status]` — browse the request queue one card at a time. Defaults to active requests (pending, on hold, approved, downloading); pass a specific status to see history too.
 - `/media myrequests` — a compact list of your own requests and their status.
 - `/media cancel <request_id>` — cancel your own request (or, for staff, anyone's), unless it's already completed/denied/cancelled/failed. If a VRMS job is attached, this also cancels it in VRMS.

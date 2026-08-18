@@ -21,11 +21,14 @@ from cogs.media import (
     _within_season_option_text,
     build_final_gate_embed,
     build_gate_view,
+    build_playlist_progress_embed,
     build_release_gate_embed,
+    build_request_embed,
     build_status_view,
 )
 from services.database import Database
 from services.tmdb import TMDBClient, TMDBError, _to_result, _is_anime
+from services.musicbrainz import _to_result as _mb_to_result
 
 
 class TMDBParsingTests(unittest.TestCase):
@@ -83,6 +86,81 @@ class TMDBParsingTests(unittest.TestCase):
 
     def test_is_anime_handles_missing_fields(self):
         self.assertFalse(_is_anime({"id": 1}, "tv"))
+
+
+class MusicBrainzParsingTests(unittest.TestCase):
+    def test_extracts_artist_year_and_cover_art_url(self):
+        result = _mb_to_result(
+            {
+                "id": "f2e6f4d0-1234-4a1b-9c9c-abcdef123456",
+                "title": "The Dark Side of the Moon",
+                "date": "1973-03-01",
+                "artist-credit": [{"name": "Pink Floyd"}],
+            }
+        )
+        self.assertEqual(result.mbid, "f2e6f4d0-1234-4a1b-9c9c-abcdef123456")
+        self.assertEqual(result.title, "The Dark Side of the Moon")
+        self.assertEqual(result.artist, "Pink Floyd")
+        self.assertEqual(result.year, "1973")
+        self.assertEqual(
+            result.poster_url, "https://coverartarchive.org/release/f2e6f4d0-1234-4a1b-9c9c-abcdef123456/front"
+        )
+
+    def test_missing_date_and_artist_are_none(self):
+        result = _mb_to_result({"id": "x", "title": "Untitled"})
+        self.assertIsNone(result.year)
+        self.assertIsNone(result.artist)
+
+
+def _request_row(**overrides) -> dict:
+    base = {
+        "id": 1,
+        "title": "Some Title",
+        "year": None,
+        "overview": None,
+        "status": "pending",
+        "media_type": "movie",
+        "is_anime": 0,
+        "artist": None,
+        "requester_id": 42,
+        "vrms_progress": None,
+        "vrms_stage": None,
+        "notes": None,
+        "reviewer_id": None,
+        "poster_url": None,
+        "external_id": None,
+        "tmdb_id": 550,
+    }
+    base.update(overrides)
+    return base
+
+
+class RequestEmbedTests(unittest.TestCase):
+    def test_music_type_shows_music_label_and_artist_field(self):
+        row = _request_row(
+            title="The Dark Side of the Moon",
+            media_type="music",
+            artist="Pink Floyd",
+            external_id="f2e6f4d0-1234-4a1b-9c9c-abcdef123456",
+            tmdb_id=0,
+        )
+        embed = build_request_embed(row)
+        fields = {f.name: f.value for f in embed.fields}
+        self.assertEqual(fields["Type"], "Music")
+        self.assertEqual(fields["Artist"], "Pink Floyd")
+        self.assertIn("MusicBrainz f2e6f4d0-1234-4a1b-9c9c-abcdef123456", embed.footer.text)
+
+    def test_movie_type_has_no_artist_field(self):
+        row = _request_row(media_type="movie")
+        embed = build_request_embed(row)
+        self.assertNotIn("Artist", {f.name for f in embed.fields})
+        self.assertIn("TMDB 550", embed.footer.text)
+
+    def test_anime_type_label(self):
+        row = _request_row(media_type="tv", is_anime=1)
+        embed = build_request_embed(row)
+        fields = {f.name: f.value for f in embed.fields}
+        self.assertEqual(fields["Type"], "Anime")
 
 
 class MediaActionButtonTemplateTests(unittest.TestCase):
@@ -399,6 +477,30 @@ class MediaDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.update_media_request_status(request_id, "denied", reviewer_id=9)
         self.assertIsNone(await self.db.get_active_media_request(1, 550, "movie"))
 
+    async def test_create_and_fetch_album_request(self):
+        request_id = await self.db.create_media_request(
+            1, 2, "music", 0, "The Dark Side of the Moon", "1973", None, None, None,
+            artist="Pink Floyd", external_id="f2e6f4d0-1234-4a1b-9c9c-abcdef123456",
+        )
+        request = await self.db.get_media_request(request_id)
+        self.assertEqual(request["media_type"], "music")
+        self.assertEqual(request["artist"], "Pink Floyd")
+        self.assertEqual(request["external_id"], "f2e6f4d0-1234-4a1b-9c9c-abcdef123456")
+
+    async def test_active_album_request_blocks_duplicate_by_external_id(self):
+        await self.db.create_media_request(
+            1, 2, "music", 0, "Album", None, None, None, None, external_id="mbid-1",
+        )
+        self.assertIsNotNone(await self.db.get_active_album_request(1, "mbid-1"))
+        self.assertIsNone(await self.db.get_active_album_request(1, "mbid-2"))
+
+    async def test_denied_album_request_is_not_active(self):
+        request_id = await self.db.create_media_request(
+            1, 2, "music", 0, "Album", None, None, None, None, external_id="mbid-1",
+        )
+        await self.db.update_media_request_status(request_id, "denied", reviewer_id=9)
+        self.assertIsNone(await self.db.get_active_album_request(1, "mbid-1"))
+
     async def test_list_media_requests_filters_by_status_and_guild(self):
         await self.db.create_media_request(1, 2, "movie", 1, "A", None, None, None, None)
         await self.db.create_media_request(1, 2, "movie", 2, "B", None, None, None, None)
@@ -452,6 +554,51 @@ class MediaDatabaseTests(unittest.IsolatedAsyncioTestCase):
         request = await self.db.get_media_request(request_id)
         self.assertIsNone(request["vrms_gate_channel_id"])
         self.assertIsNone(request["vrms_gate_message_id"])
+
+    async def test_playlist_import_lifecycle(self):
+        import_id = await self.db.create_playlist_import(1, "run-1", "My Playlist", 10, 20, total=5)
+        active = await self.db.list_active_playlist_imports()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["id"], import_id)
+        self.assertEqual(active[0]["total"], 5)
+        self.assertEqual(active[0]["playlist_title"], "My Playlist")
+
+        await self.db.mark_playlist_import_finished(import_id)
+        self.assertEqual(await self.db.list_active_playlist_imports(), [])
+
+    async def test_multiple_active_playlist_imports_are_independent(self):
+        await self.db.create_playlist_import(1, "run-1", "A", 10, 20, total=3)
+        id2 = await self.db.create_playlist_import(1, "run-2", "B", 10, 21, total=4)
+
+        active = await self.db.list_active_playlist_imports()
+        self.assertEqual({row["run_id"] for row in active}, {"run-1", "run-2"})
+
+        await self.db.mark_playlist_import_finished(id2)
+        active = await self.db.list_active_playlist_imports()
+        self.assertEqual({row["run_id"] for row in active}, {"run-1"})
+
+
+class PlaylistProgressEmbedTests(unittest.TestCase):
+    def test_shows_completed_fraction_and_breakdown(self):
+        embed = build_playlist_progress_embed("My Playlist", {"completed": 3, "running": 2}, total=5)
+        self.assertIn("3/5 completed", embed.description)
+        breakdown = next(f for f in embed.fields if f.name == "Status Breakdown").value
+        self.assertIn("Completed: 3", breakdown)
+        self.assertIn("Running: 2", breakdown)
+
+    def test_finished_with_no_failures_sets_finished_footer(self):
+        embed = build_playlist_progress_embed("My Playlist", {"completed": 5}, total=5)
+        self.assertEqual(embed.footer.text, "Import finished.")
+
+    def test_not_finished_keeps_the_default_footer(self):
+        # "Import finished." only gets set once every job reaches a terminal state -- while
+        # still in progress the embed keeps make_embed's default "VeryRareBot v..." footer.
+        embed = build_playlist_progress_embed("My Playlist", {"completed": 2, "pending": 3}, total=5)
+        self.assertNotEqual(embed.footer.text, "Import finished.")
+
+    def test_zero_total_does_not_divide_by_zero(self):
+        embed = build_playlist_progress_embed("Empty", {}, total=0)
+        self.assertIn("0/0 completed", embed.description)
 
 
 class MediaPanelTests(unittest.TestCase):

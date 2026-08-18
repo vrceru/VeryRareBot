@@ -97,3 +97,12 @@ class VRMSAPIClient:
 
     async def deny_final(self, job_id: str) -> dict[str, Any]:
         return await self._request("POST", f"/api/jobs/{job_id}/deny-final")
+
+    async def ingest_youtube_playlist(self, url: str) -> dict[str, Any]:
+        """Bulk-imports a YouTube playlist: one VRMS job per track, each still going through
+        the normal two approval gates individually -- see docs/youtube-ingestion.md in the VRMS
+        repo. Requires YOUTUBE_INGESTION_ENABLED=true server-side; VRMS returns 400 otherwise."""
+        return await self._request("POST", "/api/ingest/youtube", json={"url": url})
+
+    async def get_ingestion_run(self, run_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/api/ingest/youtube/{run_id}")

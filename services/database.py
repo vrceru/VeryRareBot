@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS tempvoice_channels (
     panel_message_id INTEGER,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS playlist_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    playlist_title TEXT,
+    panel_channel_id INTEGER NOT NULL,
+    panel_message_id INTEGER NOT NULL,
+    total INTEGER NOT NULL,
+    finished INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_playlist_imports_finished ON playlist_imports (finished);
 """
 
 # Additive migrations for columns added after a table's first release, since
@@ -99,6 +113,10 @@ _MIGRATIONS = (
     ("media_requests", "vrms_progress", "REAL"),
     ("media_requests", "vrms_stage", "TEXT"),
     ("media_requests", "is_anime", "INTEGER"),
+    ("media_requests", "artist", "TEXT"),
+    # Non-numeric external catalog id (a MusicBrainz release UUID) for album requests --
+    # tmdb_id stays NOT NULL/0 for these rows since it can't hold a UUID.
+    ("media_requests", "external_id", "TEXT"),
 )
 
 ACTIVE_MEDIA_STATUSES = ("pending", "on_hold", "approved", "downloading")
@@ -287,13 +305,19 @@ class Database:
         overview: str | None,
         notes: str | None,
         is_anime: bool = False,
+        artist: str | None = None,
+        external_id: str | None = None,
     ) -> int:
         now = _now()
         cursor = await self.conn.execute(
             "INSERT INTO media_requests "
             "(guild_id, requester_id, media_type, tmdb_id, title, year, poster_url, overview, notes, "
-            "is_anime, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-            (guild_id, requester_id, media_type, tmdb_id, title, year, poster_url, overview, notes, int(is_anime), now, now),
+            "is_anime, artist, external_id, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (
+                guild_id, requester_id, media_type, tmdb_id, title, year, poster_url, overview, notes,
+                int(is_anime), artist, external_id, now, now,
+            ),
         )
         await self.conn.commit()
         return cursor.lastrowid
@@ -308,6 +332,17 @@ class Database:
             f"SELECT * FROM media_requests WHERE guild_id = ? AND tmdb_id = ? AND media_type = ? "
             f"AND status IN ({placeholders})",
             (guild_id, tmdb_id, media_type, *ACTIVE_MEDIA_STATUSES),
+        )
+        return await cursor.fetchone()
+
+    async def get_active_album_request(self, guild_id: int, external_id: str) -> aiosqlite.Row | None:
+        """Duplicate-check for album requests, keyed by MusicBrainz release id rather than
+        tmdb_id (which is meaningless -- 0 -- for these rows)."""
+        placeholders = ",".join("?" for _ in ACTIVE_MEDIA_STATUSES)
+        cursor = await self.conn.execute(
+            f"SELECT * FROM media_requests WHERE guild_id = ? AND external_id = ? AND media_type = 'music' "
+            f"AND status IN ({placeholders})",
+            (guild_id, external_id, *ACTIVE_MEDIA_STATUSES),
         )
         return await cursor.fetchone()
 
@@ -439,5 +474,32 @@ class Database:
         await self.conn.execute(
             "DELETE FROM tempvoice_channels WHERE channel_id = ?",
             (channel_id,),
+        )
+        await self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Playlist imports (aggregate progress panel for /media importplaylist)
+    # ------------------------------------------------------------------
+
+    async def create_playlist_import(
+        self, guild_id: int, run_id: str, playlist_title: str | None, panel_channel_id: int, panel_message_id: int, total: int
+    ) -> int:
+        cursor = await self.conn.execute(
+            "INSERT INTO playlist_imports "
+            "(guild_id, run_id, playlist_title, panel_channel_id, panel_message_id, total, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (guild_id, run_id, playlist_title, panel_channel_id, panel_message_id, total, _now()),
+        )
+        await self.conn.commit()
+        return cursor.lastrowid
+
+    async def list_active_playlist_imports(self) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute("SELECT * FROM playlist_imports WHERE finished = 0")
+        return list(await cursor.fetchall())
+
+    async def mark_playlist_import_finished(self, import_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE playlist_imports SET finished = 1 WHERE id = ?",
+            (import_id,),
         )
         await self.conn.commit()

@@ -16,6 +16,7 @@ from config import settings
 from core.checks import has_any_role, staff_access
 from core.embed import error_embed, make_embed, success_embed
 from services.tmdb import TMDBClient, TMDBError
+from services.musicbrainz import MusicBrainzClient, MusicBrainzError
 from services.vrms_api import VRMSAPIClient, VRMSAPIError
 
 logger = logging.getLogger("VeryRareBot")
@@ -104,11 +105,15 @@ def build_request_embed(request) -> discord.Embed:
     embed = make_embed(title, request["overview"], color=color)
     if request["media_type"] == "movie":
         type_label = "Movie"
+    elif request["media_type"] == "music":
+        type_label = "Music"
     elif request["is_anime"]:
         type_label = "Anime"
     else:
         type_label = "TV Show"
     embed.add_field(name="Type", value=type_label, inline=True)
+    if request["media_type"] == "music" and request["artist"]:
+        embed.add_field(name="Artist", value=request["artist"], inline=True)
     embed.add_field(name="Status", value=STATUS_LABELS.get(request["status"], request["status"]), inline=True)
     embed.add_field(name="Requested By", value=f"<@{request['requester_id']}>", inline=True)
     if request["status"] == "downloading" and request["vrms_progress"] is not None:
@@ -122,7 +127,10 @@ def build_request_embed(request) -> discord.Embed:
         embed.add_field(name="Reviewed By", value=f"<@{request['reviewer_id']}>", inline=True)
     if request["poster_url"]:
         embed.set_thumbnail(url=request["poster_url"])
-    embed.set_footer(text=f"Request #{request['id']} • TMDB {request['tmdb_id']}")
+    if request["media_type"] == "music":
+        embed.set_footer(text=f"Request #{request['id']} • MusicBrainz {request['external_id']}")
+    else:
+        embed.set_footer(text=f"Request #{request['id']} • TMDB {request['tmdb_id']}")
     return embed
 
 
@@ -154,6 +162,31 @@ def build_status_view(request) -> discord.ui.View:
                 MediaActionButton("completed", request_id, label="Mark Completed", style=discord.ButtonStyle.success, emoji="🎉")
             )
     return view
+
+
+def build_playlist_progress_embed(playlist_title: str, live_counts: dict, total: int) -> discord.Embed:
+    """Aggregate progress panel for a whole /media importplaylist run -- kept up to date by
+    Media._refresh_playlist_import_panels, separate from (and complementary to) the individual
+    release/final-approval gate cards each track still gets as it reaches them."""
+    completed = live_counts.get("completed", 0)
+    failed = live_counts.get("failed", 0) + live_counts.get("cancelled", 0)
+    terminal = completed + failed
+    fraction = (completed / total) if total else 0.0
+    bar = _progress_bar(fraction)
+
+    finished = total > 0 and terminal >= total
+    color = discord.Color.dark_green() if finished and failed == 0 else (discord.Color.orange() if finished else discord.Color.gold())
+
+    summary = f"`{bar}` {completed}/{total} completed"
+    if failed:
+        summary += f" • {failed} failed"
+    embed = make_embed(f'Importing "{playlist_title}"', summary, color=color)
+
+    breakdown = "\n".join(f"{key.replace('_', ' ').title()}: {value}" for key, value in sorted(live_counts.items()) if value)
+    embed.add_field(name="Status Breakdown", value=breakdown or "No jobs tracked yet.", inline=False)
+    if finished:
+        embed.set_footer(text="Import finished.")
+    return embed
 
 
 async def _apply_status(bot, request_id: int, new_status: str, reviewer_id: int | None = None):
@@ -209,16 +242,24 @@ async def _start_vrms_job_if_configured(bot, request) -> tuple[dict, str | None]
         media_type = "show"
     else:
         media_type = request["media_type"]
+    if media_type == "music":
+        # A MusicBrainz release id, not a TMDB id -- VRMS's MusicBrainz provider expects
+        # exactly this, matching the id search_releases/get_release already resolved.
+        metadata_id = request["external_id"]
+    elif media_type == "anime":
+        # metadataId is a TMDB id -- only meaningful for the movie/tmdb-tv metadata
+        # providers. VRMS resolves anime through AniList instead, so passing it there
+        # would be a guaranteed-wrong direct lookup; let fetchMetadata fall back to an
+        # AniList title/year search.
+        metadata_id = None
+    else:
+        metadata_id = str(request["tmdb_id"])
     try:
         job = await client.enqueue(
             request["title"],
             media_type,
             year=int(request["year"]) if request["year"] else None,
-            # metadataId is a TMDB id -- only meaningful for the movie/tmdb-tv metadata
-            # providers. VRMS resolves anime through AniList instead, so passing it there
-            # would be a guaranteed-wrong direct lookup; let fetchMetadata fall back to an
-            # AniList title/year search.
-            metadata_id=None if media_type == "anime" else str(request["tmdb_id"]),
+            metadata_id=metadata_id,
         )
     except VRMSAPIError as exc:
         logger.warning("VRMS enqueue failed for media request #%s: %s", request["id"], exc)
@@ -285,6 +326,62 @@ async def submit_media_request(
 
     logger.info("Media request #%s (%s:%s) opened by %s", request_id, result.media_type, result.tmdb_id, user)
     return success_embed("Request Submitted", f"Your request for **{result.title}** has been sent for review.")
+
+
+async def submit_album_request(
+    bot, guild_id: int, user: discord.abc.User, title: str, notes: str | None, fallback_channel: discord.abc.Messageable | None
+) -> discord.Embed:
+    """Resolves an album via MusicBrainz, creates the request, and posts its card -- the album
+    counterpart to submit_media_request, backing /media album. Distinct from /music (live
+    streaming playback, no download or library involved), this actually matches a real release
+    (with a real tracklist) and routes it through VRMS's download/organize pipeline into
+    VeryRare Media."""
+    client = MusicBrainzClient()
+
+    match = re.fullmatch(r"mbid:([0-9a-f-]+)", title)
+    try:
+        if match:
+            result = await client.get_release(match.group(1))
+        else:
+            results = await client.search_releases(title, limit=1)
+            if not results:
+                return error_embed("Not Found", f"No album results for **{title}**. Try again and pick a suggestion as you type.")
+            result = results[0]
+    except MusicBrainzError as exc:
+        return error_embed("MusicBrainz Error", str(exc))
+
+    existing = await bot.db.get_active_album_request(guild_id, result.mbid)
+    if existing is not None:
+        return error_embed(
+            "Already Requested",
+            f"**{result.title}** is already requested (status: {STATUS_LABELS.get(existing['status'], existing['status'])})."
+        )
+
+    request_id = await bot.db.create_media_request(
+        guild_id,
+        user.id,
+        "music",
+        0,
+        result.title,
+        result.year,
+        result.poster_url,
+        None,
+        notes,
+        artist=result.artist,
+        external_id=result.mbid,
+    )
+    request_row = await bot.db.get_media_request(request_id)
+
+    queue_channel_id = settings.MEDIA_QUE_CHANNEL_ID or settings.MEDIA_REQUEST_CHANNEL_ID
+    channel = bot.get_channel(queue_channel_id) if queue_channel_id else fallback_channel
+    if channel is None:
+        return error_embed("Configuration Error", "No media queue channel is configured and this channel isn't usable either.")
+    message = await channel.send(embed=build_request_embed(request_row), view=build_status_view(request_row))
+    await bot.db.set_media_request_message(request_id, channel.id, message.id)
+
+    logger.info("Album request #%s (musicbrainz:%s) opened by %s", request_id, result.mbid, user)
+    artist_label = result.artist or "Unknown Artist"
+    return success_embed("Request Submitted", f"Your request for **{result.title}** by **{artist_label}** has been sent for review.")
 
 
 async def apply_media_action(interaction: discord.Interaction, action: str, request_id: int) -> None:
@@ -857,6 +954,35 @@ class Media(commands.Cog):
             except Exception:
                 logger.exception("Failed to process a VRMS job update for request #%s", row["id"])
 
+        try:
+            await self._refresh_playlist_import_panels(client)
+        except Exception:
+            logger.exception("Failed to refresh playlist import panels")
+
+    async def _refresh_playlist_import_panels(self, client: VRMSAPIClient) -> None:
+        rows = await self.bot.db.list_active_playlist_imports()
+        for row in rows:
+            try:
+                run = await client.get_ingestion_run(row["run_id"])
+            except VRMSAPIError as exc:
+                logger.debug("Failed to poll playlist import run %s: %s", row["run_id"], exc)
+                continue
+
+            live_counts = run.get("liveCounts") or {}
+            total = row["total"]
+            terminal = sum(live_counts.get(s, 0) for s in ("completed", "failed", "cancelled"))
+
+            channel = self.bot.get_channel(row["panel_channel_id"])
+            if channel is not None:
+                try:
+                    message = await channel.fetch_message(row["panel_message_id"])
+                    await message.edit(embed=build_playlist_progress_embed(row["playlist_title"] or "Playlist", live_counts, total))
+                except discord.HTTPException:
+                    logger.warning("Failed to refresh the playlist import panel for run %s.", row["run_id"])
+
+            if total > 0 and terminal >= total:
+                await self.bot.db.mark_playlist_import_finished(row["id"])
+
     @vrms_job_watch.before_loop
     async def before_vrms_job_watch(self):
         await self.bot.wait_until_ready()
@@ -976,6 +1102,58 @@ class Media(commands.Cog):
         await interaction.channel.send(embed=embed, view=MediaPanelView())
         await interaction.response.send_message(embed=success_embed("Panel Posted"), ephemeral=True)
 
+    @staff_access()
+    @media.command(name="importplaylist", description="Bulk-import a YouTube playlist into VeryRare Media.")
+    @app_commands.describe(url="A YouTube playlist URL.")
+    async def import_playlist(self, interaction: discord.Interaction, url: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            client = VRMSAPIClient.from_settings()
+        except VRMSAPIError as exc:
+            await interaction.followup.send(embed=error_embed("VRMS Unavailable", str(exc)))
+            return
+
+        try:
+            result = await client.ingest_youtube_playlist(url)
+        except VRMSAPIError as exc:
+            await interaction.followup.send(embed=error_embed("Import Failed", str(exc)))
+            return
+
+        # One tracking row per enqueued track, pre-approved (staff already approved the bulk
+        # import) with its vrms_job_id set immediately -- this is exactly the state a normal
+        # request reaches right after Approve, so the existing vrms_job_watch loop picks each one
+        # up on its own and posts release/final-approval gate cards as they come due, with no
+        # separate polling logic needed. No card_channel_id/card_message_id is set, so it
+        # deliberately doesn't also post one "request submitted" card per track (which would
+        # spam the channel for a large playlist) -- the panel below covers that instead.
+        jobs = result.get("jobs") or []
+        for job in jobs:
+            request_id = await self.bot.db.create_media_request(
+                interaction.guild_id, interaction.user.id, "music", 0, job["title"], None, None, None, None,
+            )
+            await self.bot.db.set_media_request_vrms_job(request_id, job["id"])
+            await self.bot.db.update_media_request_status(request_id, "approved", reviewer_id=interaction.user.id)
+
+        playlist_title = result.get("playlistTitle") or "Playlist"
+        total = result.get("enqueued", 0)
+        panel_message = await interaction.channel.send(
+            embed=build_playlist_progress_embed(playlist_title, {"pending": total} if total else {}, total)
+        )
+        if total > 0:
+            await self.bot.db.create_playlist_import(
+                interaction.guild_id, result["runId"], result.get("playlistTitle"), interaction.channel.id, panel_message.id, total,
+            )
+
+        summary = (
+            f"Discovered **{result.get('discovered', 0)}** • Enqueued **{total}** • "
+            f"Already imported **{result.get('skippedDuplicate', 0)}** • Failed **{result.get('failed', 0)}**\n\n"
+            "Track the panel above for live overall progress. Individual release/final-approval cards "
+            "will appear as each track reaches its gate -- every track still needs its own approval, "
+            "same as a single request."
+        )
+        await interaction.followup.send(embed=success_embed(f"Importing \"{playlist_title}\"", summary))
+
     @request.autocomplete("title")
     async def title_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         if len(current) < 2 or not settings.TMDB_API_KEY:
@@ -997,6 +1175,35 @@ class Media(commands.Cog):
                 kind = "TV"
             label = f"{label} · {kind}"
             choices.append(app_commands.Choice(name=label[:100], value=f"{result.media_type}:{result.tmdb_id}"))
+        return choices[:25]
+
+    @media.command(name="album", description="Request an album for VeryRare Media.")
+    @app_commands.describe(title="Start typing an album or artist, then pick a suggestion.", notes="Anything staff should know (optional).")
+    async def album(self, interaction: discord.Interaction, title: str, notes: str | None = None):
+        if interaction.guild is None:
+            await interaction.response.send_message(embed=error_embed("Server Only", "Media can only be requested in a server."), ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        embed = await submit_album_request(self.bot, interaction.guild_id, interaction.user, title, notes, interaction.channel)
+        await interaction.followup.send(embed=embed)
+
+    @album.autocomplete("title")
+    async def album_title_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        if len(current) < 2:
+            return []
+        try:
+            client = MusicBrainzClient()
+            results = await client.search_releases(current, limit=20)
+        except MusicBrainzError:
+            return []
+
+        choices = []
+        for result in results:
+            label = f"{result.title} ({result.year})" if result.year else result.title
+            if result.artist:
+                label = f"{label} · {result.artist}"
+            choices.append(app_commands.Choice(name=label[:100], value=f"mbid:{result.mbid}"))
         return choices[:25]
 
     @media.command(name="queue", description="Browse the media request queue.")
