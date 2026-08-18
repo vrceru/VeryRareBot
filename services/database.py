@@ -353,6 +353,16 @@ class Database:
         )
         await self.conn.commit()
 
+    async def set_media_request_channel(self, request_id: int, channel_id: int) -> None:
+        """Sets card_channel_id without a card_message_id -- for rows that never get their own
+        per-track "submitted" card (e.g. a bulk playlist import) but still need a channel for
+        _ensure_vrms_gate_card to post release/final-approval gate cards into."""
+        await self.conn.execute(
+            "UPDATE media_requests SET card_channel_id = ? WHERE id = ?",
+            (channel_id, request_id),
+        )
+        await self.conn.commit()
+
     async def set_media_request_vrms_job(self, request_id: int, job_id: str) -> None:
         await self.conn.execute(
             "UPDATE media_requests SET vrms_job_id = ? WHERE id = ?",

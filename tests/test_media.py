@@ -555,6 +555,13 @@ class MediaDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(request["vrms_gate_channel_id"])
         self.assertIsNone(request["vrms_gate_message_id"])
 
+    async def test_set_media_request_channel_leaves_message_id_unset(self):
+        request_id = await self.db.create_media_request(1, 2, "music", 0, "Track", None, None, None, None)
+        await self.db.set_media_request_channel(request_id, 12345)
+        request = await self.db.get_media_request(request_id)
+        self.assertEqual(request["card_channel_id"], 12345)
+        self.assertIsNone(request["card_message_id"])
+
     async def test_playlist_import_lifecycle(self):
         import_id = await self.db.create_playlist_import(1, "run-1", "My Playlist", 10, 20, total=5)
         active = await self.db.list_active_playlist_imports()

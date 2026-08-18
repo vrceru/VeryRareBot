@@ -1124,14 +1124,16 @@ class Media(commands.Cog):
         # import) with its vrms_job_id set immediately -- this is exactly the state a normal
         # request reaches right after Approve, so the existing vrms_job_watch loop picks each one
         # up on its own and posts release/final-approval gate cards as they come due, with no
-        # separate polling logic needed. No card_channel_id/card_message_id is set, so it
-        # deliberately doesn't also post one "request submitted" card per track (which would
-        # spam the channel for a large playlist) -- the panel below covers that instead.
+        # separate polling logic needed. card_channel_id is set to this channel (so
+        # _ensure_vrms_gate_card has somewhere to post those gate cards) but card_message_id is
+        # deliberately left unset, so it doesn't also post one "request submitted" card per track
+        # (which would spam the channel for a large playlist) -- the panel below covers that instead.
         jobs = result.get("jobs") or []
         for job in jobs:
             request_id = await self.bot.db.create_media_request(
                 interaction.guild_id, interaction.user.id, "music", 0, job["title"], None, None, None, None,
             )
+            await self.bot.db.set_media_request_channel(request_id, interaction.channel.id)
             await self.bot.db.set_media_request_vrms_job(request_id, job["id"])
             await self.bot.db.update_media_request_status(request_id, "approved", reviewer_id=interaction.user.id)
 
